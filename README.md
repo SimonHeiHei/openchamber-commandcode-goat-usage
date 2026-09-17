@@ -8,10 +8,10 @@ The panel follows your OpenChamber language: Chinese hosts get Chinese, everythi
 
 ## What it shows
 
-- **Core metrics** — four cards above the quota bars, for the current billing period: requests (with the failed count), success rate, cost (with the credits it was drawn from) and tokens (with the input / output split).
+- **Core metrics** — four cards above the quota bars, for the current billing period: requests (with the failed count), success rate, cost, and tokens (with the input / output split).
 - **Three quota bars** — the rolling 5-hour window, the rolling weekly window, and the monthly credit pool. Each shows its remaining amount and a live reset countdown, and escalates from neutral to warning (≥ 60%) to error (≥ 90%).
 - **Billing period** — the plan id, the subscription status, and the current period (start → end). The refresh control sits at the right end of that row.
-- **Local cost, as charts** — pick today, this week, this month or all time. The current week is a **stacked column chart** (cost per day, split by model, with a colour legend); hovering a segment shows that day and model's cost, tokens, turns and conversations. The current month is a **calendar heat grid** (cost per day, intensity scaled to the month); today shows no day view. Every range ends with a **horizontal per-model ranking** — cost, turns, conversations, tokens and cache hit rate, largest first.
+- **Local cost, as charts** — pick today, this week, this month or all time. The current week is a **stacked column chart** (cost per day, split by model, with a colour legend); hovering a segment shows that day and model's cost, tokens, turns and conversations. The current month is a **calendar heat grid** (cost per day, intensity scaled to the month), where hovering a day shows the same per-model detail; today shows no day view. Every range ends with a **horizontal per-model ranking** — cost, turns, conversations, tokens and cache hit rate, largest first.
 - **Rail badge** — the share of the weekly window you still have left, drawn on the extension's icon.
 
 Two notes on the numbers: token figures are shown in millions (`M`), and a day whose recorded cost is zero shows `$0.00` rather than a dash — models without a configured price are recorded at cost 0 and OpenCode never backfills, so a day can hold real work with a zero bill.

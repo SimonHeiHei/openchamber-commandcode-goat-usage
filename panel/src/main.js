@@ -15,6 +15,7 @@ const MESSAGES = {
     retry: '重试',
     loading: '正在读取用量…',
     refresh: '刷新',
+    refreshBusy: '刷新中…',
     planFallback: 'Goat 订阅',
     periodUnavailable: '计费周期不可用',
     barFiveHour: '5 小时窗口',
@@ -33,12 +34,13 @@ const MESSAGES = {
     cardCost: '花费',
     cardTokens: 'Token',
     cardFailed: (count) => `失败 ${count}`,
-    creditsLabel: 'credits',
     metaTurns: (count) => `${count} 轮`,
     metaSessions: (count) => `${count} 对话`,
     metaTokens: (value) => `${value} tokens`,
     metaCached: (pct) => `缓存 ${pct}`,
     metaSep: ' · ',
+    tipOtherModels: (count) => `其他 ${count} 个模型`,
+    cellModels: (count) => `${count} 个模型`,
     statSessions: '对话',
     statFailed: '失败',
     localCost: '本地成本',
@@ -87,6 +89,7 @@ const MESSAGES = {
     retry: 'Retry',
     loading: 'Reading usage…',
     refresh: 'Refresh',
+    refreshBusy: 'Refreshing…',
     planFallback: 'Goat subscription',
     periodUnavailable: 'Billing period unavailable',
     barFiveHour: '5h window',
@@ -105,12 +108,13 @@ const MESSAGES = {
     cardCost: 'Cost',
     cardTokens: 'Tokens',
     cardFailed: (count) => `${count} failed`,
-    creditsLabel: 'credits',
     metaTurns: (count) => `${count} turns`,
     metaSessions: (count) => `${count} sessions`,
     metaTokens: (value) => `${value} tokens`,
     metaCached: (pct) => `${pct} cached`,
     metaSep: ' · ',
+    tipOtherModels: (count) => `${count} more models`,
+    cellModels: (count) => `${count} models`,
     statSessions: 'Sessions',
     statFailed: 'Failed',
     localCost: 'Local cost',
@@ -326,71 +330,51 @@ function buildCard(label) {
   return { box, value, sub };
 }
 
-function refreshIcon() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('fill', 'currentColor');
-  svg.setAttribute('aria-hidden', 'true');
-  svg.setAttribute('focusable', 'false');
-  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  path.setAttribute('d', 'M5.463 4.433A9.961 9.961 0 0 1 12 2c5.523 0 10 4.477 10 10 0 2.136-.67 4.116-1.81 5.74L17 12h3A8 8 0 0 0 6.46 6.228l-.997-1.795Zm13.074 15.134A9.961 9.961 0 0 1 12 22C6.477 22 2 17.523 2 12c0-2.136.67-4.116 1.81-5.74L7 12H4a8 8 0 0 0 13.54 5.772l.997 1.795Z');
-  svg.append(path);
-  return svg;
-}
-
-function buildRefreshButton(slot) {
-  const node = el('button', 'cg-iconbtn');
-  node.type = 'button';
-  const icon = refreshIcon();
-  const ring = el('span', 'cg-iconbtn-ring');
-  ring.hidden = true;
-  node.append(icon, ring);
-  const sync = (loading) => {
-    node.disabled = Boolean(loading);
-    node.setAttribute('aria-busy', loading ? 'true' : 'false');
-    ring.hidden = !loading;
-    icon.hidden = Boolean(loading);
-  };
-  const label = t('refresh');
-  node.setAttribute('aria-label', label);
-  node.title = label;
-  node.addEventListener('click', () => {
-    if (!node.disabled) void manualRefresh();
-  });
-  slot.append(node);
-  sync(false);
-  return { node, update: (next) => sync(next.loading) };
-}
-
-/* week-chart tooltip — a custom node so it carries tokens/sessions, not just a title */
-const tip = { box: null, head: null, model: null, stat: null, tokens: null };
-let tipSegNode = null;
+/* chart tooltip — one custom node shared by week segments and calendar cells */
+const CAL_TIP_MODELS = 5;
+const tip = { box: null, head: null, rows: [] };
+let tipAnchor = null;
 
 function ensureTip() {
   if (tip.box) return tip.box;
   const box = el('div', 'cg-tip');
   const head = el('div', 'cg-tip-head');
-  const model = el('div', 'cg-tip-model');
-  const stat = el('div', 'cg-tip-line');
-  const tokens = el('div', 'cg-tip-line');
-  box.append(head, model, stat, tokens);
+  box.append(head);
   box.hidden = true;
   document.body.append(box);
-  Object.assign(tip, { box, head, model, stat, tokens });
+  Object.assign(tip, { box, head, rows: [] });
   return box;
 }
 
-function tipLines(seg) {
-  const weekday = seg.date ? t('weekdays')[seg.date.getDay()] : '';
-  return [
-    weekday ? `${seg.day} ${weekday}` : String(seg.day ?? ''),
-    seg.label,
-    `${money4(seg.cost)} · ${t('metaTurns')(int(num(seg.turns)))} · ${t('metaSessions')(int(num(seg.sessions)))}`,
-    `${mtok(num(seg.input))} ${t('tokensIn')} / ${mtok(num(seg.output))} ${t('tokensOut')}`,
-  ];
+/** Paints the rows under the header, reusing nodes across shows. */
+function tipBody(rows) {
+  ensureTip();
+  while (tip.rows.length > rows.length) tip.rows.pop().remove();
+  rows.forEach((row, i) => {
+    if (!tip.rows[i]) {
+      const node = el('div');
+      tip.box.append(node);
+      tip.rows[i] = node;
+    }
+    const node = tip.rows[i];
+    if (node.className !== row.cls) node.className = row.cls;
+    node.textContent = row.text;
+  });
 }
+
+const tipHead = (day, date) => {
+  const weekday = date ? t('weekdays')[date.getDay()] : '';
+  return weekday ? `${day} ${weekday}` : String(day ?? '');
+};
+
+const tipModelRows = (row, label) => [
+  { cls: 'cg-tip-model', text: label ?? shortModel(row.model) },
+  { cls: 'cg-tip-line', text: `${money4(costOf(row))} · ${t('metaTurns')(int(num(row.turns)))} · ${t('metaSessions')(int(num(row.sessions)))}` },
+  { cls: 'cg-tip-line', text: `${mtok(num(row.input))} ${t('tokensIn')} / ${mtok(num(row.output))} ${t('tokensOut')}` },
+];
+
+const segAriaText = (seg) =>
+  [tipHead(seg.day, seg.date), ...tipModelRows(seg, seg.label).map((row) => row.text)].join(' · ');
 
 function positionTip(x, y) {
   const box = tip.box;
@@ -405,24 +389,46 @@ function positionTip(x, y) {
   box.style.top = `${Math.round(Math.min(Math.max(TIP_PAD, top), maxTop))}px`;
 }
 
-function showTip(node, x, y) {
+function showTipFor(anchor, headText, rows, x, y) {
+  ensureTip();
+  tip.head.textContent = headText;
+  tipBody(rows);
+  tip.box.hidden = false;
+  tipAnchor = anchor;
+  positionTip(x, y);
+}
+
+function showSegTip(node, x, y) {
   const seg = node.cgSeg;
   if (!seg) return;
-  const lines = tipLines(seg);
-  ensureTip();
-  tip.head.textContent = lines[0];
-  tip.model.textContent = lines[1];
-  tip.stat.textContent = lines[2];
-  tip.tokens.textContent = lines[3];
-  tip.box.hidden = false;
-  tipSegNode = node;
-  positionTip(x, y);
+  showTipFor(node, tipHead(seg.day, seg.date), tipModelRows(seg, seg.label), x, y);
+}
+
+/** Calendar cell tooltips list every model of the day, zero-cost rows included. */
+function calendarTipRows(day) {
+  const models = (Array.isArray(day.row.models) ? day.row.models.filter(isObj) : [])
+    .slice().sort((a, b) => costOf(b) - costOf(a));
+  const rows = [];
+  for (const row of models.slice(0, CAL_TIP_MODELS)) rows.push(...tipModelRows(row));
+  const rest = models.slice(CAL_TIP_MODELS);
+  if (rest.length > 0) {
+    const cost = rest.reduce((sum, row) => sum + costOf(row), 0);
+    const turns = rest.reduce((sum, row) => sum + (num(row.turns) ?? 0), 0);
+    rows.push({ cls: 'cg-tip-line', text: `${t('tipOtherModels')(rest.length)} · ${money(cost)} · ${t('metaTurns')(int(turns))}` });
+  }
+  return rows;
+}
+
+function showDayTip(cell, x, y) {
+  const day = cell.cgDay;
+  if (!day) return;
+  showTipFor(cell, tipHead(day.key, day.date), calendarTipRows(day), x, y);
 }
 
 function hideTip() {
   if (!tip.box || tip.box.hidden) return;
   tip.box.hidden = true;
-  tipSegNode = null;
+  tipAnchor = null;
 }
 
 function segAt(target, stack) {
@@ -459,7 +465,7 @@ function buildColumns() {
         hideTip();
         return;
       }
-      if (tipSegNode !== node) showTip(node, event.clientX, event.clientY);
+      if (tipAnchor !== node) showSegTip(node, event.clientX, event.clientY);
       else positionTip(event.clientX, event.clientY);
     });
     stack.addEventListener('pointerleave', (event) => {
@@ -472,8 +478,8 @@ function buildColumns() {
         return;
       }
       if (event.pointerType === 'touch') {
-        if (tipSegNode === node) hideTip();
-        else showTip(node, event.clientX, event.clientY);
+        if (tipAnchor === node) hideTip();
+        else showSegTip(node, event.clientX, event.clientY);
       }
     });
     const value = el('span', 'cg-col-value');
@@ -500,6 +506,19 @@ function buildCalendar() {
   const cells = [];
   for (let i = 0; i < CALENDAR_CELLS; i++) {
     const cell = el('div', 'cg-cell');
+    cell.addEventListener('pointermove', (event) => {
+      if (event.pointerType === 'touch' || !cell.cgDay) return;
+      if (tipAnchor !== cell) showDayTip(cell, event.clientX, event.clientY);
+      else positionTip(event.clientX, event.clientY);
+    });
+    cell.addEventListener('pointerleave', (event) => {
+      if (event.pointerType !== 'touch') hideTip();
+    });
+    cell.addEventListener('pointerdown', (event) => {
+      if (event.pointerType !== 'touch' || !cell.cgDay) return;
+      if (tipAnchor === cell) hideTip();
+      else showDayTip(cell, event.clientX, event.clientY);
+    });
     cell.hidden = true;
     grid.append(cell);
     cells.push(cell);
@@ -614,7 +633,9 @@ function buildUi() {
 
   const badge = mountBadge(badgeSlot, { label: '' });
   badgeSlot.hidden = true;
-  const refreshButton = buildRefreshButton(refreshSlot);
+  const refreshButton = mountButton(refreshSlot, {
+    label: t('refresh'), variant: 'outline', size: 'xs', onClick: () => void manualRefresh(),
+  });
 
   content.append(head, cards, bannerSlot, bars, localSection, foot);
   root.append(spinnerWrap, emptyWrap, content);
@@ -661,7 +682,7 @@ function paintStack(cell, segs, heights) {
     node.classList.toggle('is-top', i === topIndex);
     node.style.setProperty('--cg-color', MODEL_COLORS[seg.slot] ?? MODEL_COLORS[OTHER_SLOT]);
     node.style.height = `${heights[i]}px`;
-    node.setAttribute('aria-label', tipLines(node.cgSeg).join(' · '));
+    node.setAttribute('aria-label', segAriaText(node.cgSeg));
   });
 }
 
@@ -758,12 +779,18 @@ function updateCalendar(chart, local, byDay) {
     const offset = i - leading;
     if (offset < 0 || offset >= count) {
       cell.hidden = true;
+      cell.cgDay = null;
       return;
     }
     cell.hidden = false;
     cell.style.gridColumn = String((i % COLUMN_COUNT) + 1);
     cell.style.gridRow = String(Math.floor(i / COLUMN_COUNT) + 1);
     const cost = costs[offset];
+    const key = `${year}-${pad2(month + 1)}-${pad2(offset + 1)}`;
+    const row = lookup.get(key);
+    const models = row && Array.isArray(row.models) ? row.models.filter(isObj) : [];
+    cell.cgDay = row ? { key, date: new Date(year, month, offset + 1), row } : null;
+    cell.setAttribute('aria-label', `${key} · ${row ? money4(cost) : t('emptyDash')} · ${t('cellModels')(models.length)}`);
     cell.dataset.day = String(offset + 1);
     if (cost > 0 && max > 0) {
       const ratio = Math.min(1, cost / max) ** 0.7;
@@ -891,8 +918,6 @@ function renderCards(d) {
   cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t('emptyDash');
   cards.success.sub.hidden = true;
   cards.cost.value.textContent = money4(num(usage.totalCost));
-  cards.cost.sub.textContent = `${money(num(usage.totalCredits))} ${t('creditsLabel')}`;
-  cards.cost.sub.hidden = false;
   cards.tokens.value.textContent = mtok(num(usage.tokens));
   cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t('tokensIn')} / ${mtok(num(usage.tokensOut))} ${t('tokensOut')}`;
   cards.tokens.sub.hidden = false;
@@ -1000,7 +1025,7 @@ function render() {
   ui.emptyWrap.hidden = !(serviceDown || dataDown);
   ui.content.hidden = serviceDown || dataDown || !d;
   ui.spinnerWrap.hidden = !(state.loading && !d && !serviceDown && !dataDown);
-  ui.refreshButton.update({ loading: state.loading });
+  ui.refreshButton.update({ loading: state.loading, label: state.loading ? t('refreshBusy') : t('refresh') });
 
   if (d) {
     renderHeader(d);
@@ -1116,9 +1141,9 @@ window.setInterval(() => {
   if (state.data) renderBars(state.data);
 }, 30000);
 
-/* a tap outside the chart dismisses a touch-opened tooltip; scrolling invalidates its anchor */
+/* a tap outside a chart dismisses a touch-opened tooltip; scrolling invalidates its anchor */
 document.addEventListener('pointerdown', (event) => {
   const target = event.target instanceof Element ? event.target : null;
-  if (!target || !target.closest('.cg-seg')) hideTip();
+  if (!target || !target.closest('.cg-seg, .cg-cell')) hideTip();
 }, true);
 window.addEventListener('scroll', hideTip, { capture: true, passive: true });

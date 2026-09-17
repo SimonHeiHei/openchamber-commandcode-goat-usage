@@ -1528,6 +1528,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       retry: "\u91CD\u8BD5",
       loading: "\u6B63\u5728\u8BFB\u53D6\u7528\u91CF\u2026",
       refresh: "\u5237\u65B0",
+      refreshBusy: "\u5237\u65B0\u4E2D\u2026",
       planFallback: "Goat \u8BA2\u9605",
       periodUnavailable: "\u8BA1\u8D39\u5468\u671F\u4E0D\u53EF\u7528",
       barFiveHour: "5 \u5C0F\u65F6\u7A97\u53E3",
@@ -1546,12 +1547,13 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       cardCost: "\u82B1\u8D39",
       cardTokens: "Token",
       cardFailed: (count) => `\u5931\u8D25 ${count}`,
-      creditsLabel: "credits",
       metaTurns: (count) => `${count} \u8F6E`,
       metaSessions: (count) => `${count} \u5BF9\u8BDD`,
       metaTokens: (value) => `${value} tokens`,
       metaCached: (pct) => `\u7F13\u5B58 ${pct}`,
       metaSep: " \xB7 ",
+      tipOtherModels: (count) => `\u5176\u4ED6 ${count} \u4E2A\u6A21\u578B`,
+      cellModels: (count) => `${count} \u4E2A\u6A21\u578B`,
       statSessions: "\u5BF9\u8BDD",
       statFailed: "\u5931\u8D25",
       localCost: "\u672C\u5730\u6210\u672C",
@@ -1600,6 +1602,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       retry: "Retry",
       loading: "Reading usage\u2026",
       refresh: "Refresh",
+      refreshBusy: "Refreshing\u2026",
       planFallback: "Goat subscription",
       periodUnavailable: "Billing period unavailable",
       barFiveHour: "5h window",
@@ -1618,12 +1621,13 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       cardCost: "Cost",
       cardTokens: "Tokens",
       cardFailed: (count) => `${count} failed`,
-      creditsLabel: "credits",
       metaTurns: (count) => `${count} turns`,
       metaSessions: (count) => `${count} sessions`,
       metaTokens: (value) => `${value} tokens`,
       metaCached: (pct) => `${pct} cached`,
       metaSep: " \xB7 ",
+      tipOtherModels: (count) => `${count} more models`,
+      cellModels: (count) => `${count} models`,
       statSessions: "Sessions",
       statFailed: "Failed",
       localCost: "Local cost",
@@ -1830,66 +1834,43 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     box.append(el2("div", "cg-card-label", label), value, sub);
     return { box, value, sub };
   }
-  function refreshIcon() {
-    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    svg.setAttribute("viewBox", "0 0 24 24");
-    svg.setAttribute("width", "14");
-    svg.setAttribute("height", "14");
-    svg.setAttribute("fill", "currentColor");
-    svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("focusable", "false");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", "M5.463 4.433A9.961 9.961 0 0 1 12 2c5.523 0 10 4.477 10 10 0 2.136-.67 4.116-1.81 5.74L17 12h3A8 8 0 0 0 6.46 6.228l-.997-1.795Zm13.074 15.134A9.961 9.961 0 0 1 12 22C6.477 22 2 17.523 2 12c0-2.136.67-4.116 1.81-5.74L7 12H4a8 8 0 0 0 13.54 5.772l.997 1.795Z");
-    svg.append(path);
-    return svg;
-  }
-  function buildRefreshButton(slot) {
-    const node = el2("button", "cg-iconbtn");
-    node.type = "button";
-    const icon2 = refreshIcon();
-    const ring2 = el2("span", "cg-iconbtn-ring");
-    ring2.hidden = true;
-    node.append(icon2, ring2);
-    const sync = (loading) => {
-      node.disabled = Boolean(loading);
-      node.setAttribute("aria-busy", loading ? "true" : "false");
-      ring2.hidden = !loading;
-      icon2.hidden = Boolean(loading);
-    };
-    const label = t("refresh");
-    node.setAttribute("aria-label", label);
-    node.title = label;
-    node.addEventListener("click", () => {
-      if (!node.disabled) void manualRefresh();
-    });
-    slot.append(node);
-    sync(false);
-    return { node, update: (next) => sync(next.loading) };
-  }
-  var tip = { box: null, head: null, model: null, stat: null, tokens: null };
-  var tipSegNode = null;
+  var CAL_TIP_MODELS = 5;
+  var tip = { box: null, head: null, rows: [] };
+  var tipAnchor = null;
   function ensureTip() {
     if (tip.box) return tip.box;
     const box = el2("div", "cg-tip");
     const head = el2("div", "cg-tip-head");
-    const model = el2("div", "cg-tip-model");
-    const stat = el2("div", "cg-tip-line");
-    const tokens = el2("div", "cg-tip-line");
-    box.append(head, model, stat, tokens);
+    box.append(head);
     box.hidden = true;
     document.body.append(box);
-    Object.assign(tip, { box, head, model, stat, tokens });
+    Object.assign(tip, { box, head, rows: [] });
     return box;
   }
-  function tipLines(seg) {
-    const weekday = seg.date ? t("weekdays")[seg.date.getDay()] : "";
-    return [
-      weekday ? `${seg.day} ${weekday}` : String(seg.day ?? ""),
-      seg.label,
-      `${money4(seg.cost)} \xB7 ${t("metaTurns")(int(num(seg.turns)))} \xB7 ${t("metaSessions")(int(num(seg.sessions)))}`,
-      `${mtok(num(seg.input))} ${t("tokensIn")} / ${mtok(num(seg.output))} ${t("tokensOut")}`
-    ];
+  function tipBody(rows) {
+    ensureTip();
+    while (tip.rows.length > rows.length) tip.rows.pop().remove();
+    rows.forEach((row, i) => {
+      if (!tip.rows[i]) {
+        const node2 = el2("div");
+        tip.box.append(node2);
+        tip.rows[i] = node2;
+      }
+      const node = tip.rows[i];
+      if (node.className !== row.cls) node.className = row.cls;
+      node.textContent = row.text;
+    });
   }
+  var tipHead = (day, date) => {
+    const weekday = date ? t("weekdays")[date.getDay()] : "";
+    return weekday ? `${day} ${weekday}` : String(day ?? "");
+  };
+  var tipModelRows = (row, label) => [
+    { cls: "cg-tip-model", text: label ?? shortModel(row.model) },
+    { cls: "cg-tip-line", text: `${money4(costOf(row))} \xB7 ${t("metaTurns")(int(num(row.turns)))} \xB7 ${t("metaSessions")(int(num(row.sessions)))}` },
+    { cls: "cg-tip-line", text: `${mtok(num(row.input))} ${t("tokensIn")} / ${mtok(num(row.output))} ${t("tokensOut")}` }
+  ];
+  var segAriaText = (seg) => [tipHead(seg.day, seg.date), ...tipModelRows(seg, seg.label).map((row) => row.text)].join(" \xB7 ");
   function positionTip(x, y) {
     const box = tip.box;
     const width = box.offsetWidth, height = box.offsetHeight;
@@ -1902,23 +1883,40 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     box.style.left = `${Math.round(Math.min(Math.max(TIP_PAD, left), maxLeft))}px`;
     box.style.top = `${Math.round(Math.min(Math.max(TIP_PAD, top), maxTop))}px`;
   }
-  function showTip(node, x, y) {
+  function showTipFor(anchor, headText, rows, x, y) {
+    ensureTip();
+    tip.head.textContent = headText;
+    tipBody(rows);
+    tip.box.hidden = false;
+    tipAnchor = anchor;
+    positionTip(x, y);
+  }
+  function showSegTip(node, x, y) {
     const seg = node.cgSeg;
     if (!seg) return;
-    const lines = tipLines(seg);
-    ensureTip();
-    tip.head.textContent = lines[0];
-    tip.model.textContent = lines[1];
-    tip.stat.textContent = lines[2];
-    tip.tokens.textContent = lines[3];
-    tip.box.hidden = false;
-    tipSegNode = node;
-    positionTip(x, y);
+    showTipFor(node, tipHead(seg.day, seg.date), tipModelRows(seg, seg.label), x, y);
+  }
+  function calendarTipRows(day) {
+    const models = (Array.isArray(day.row.models) ? day.row.models.filter(isObj) : []).slice().sort((a, b) => costOf(b) - costOf(a));
+    const rows = [];
+    for (const row of models.slice(0, CAL_TIP_MODELS)) rows.push(...tipModelRows(row));
+    const rest = models.slice(CAL_TIP_MODELS);
+    if (rest.length > 0) {
+      const cost = rest.reduce((sum, row) => sum + costOf(row), 0);
+      const turns = rest.reduce((sum, row) => sum + (num(row.turns) ?? 0), 0);
+      rows.push({ cls: "cg-tip-line", text: `${t("tipOtherModels")(rest.length)} \xB7 ${money(cost)} \xB7 ${t("metaTurns")(int(turns))}` });
+    }
+    return rows;
+  }
+  function showDayTip(cell, x, y) {
+    const day = cell.cgDay;
+    if (!day) return;
+    showTipFor(cell, tipHead(day.key, day.date), calendarTipRows(day), x, y);
   }
   function hideTip() {
     if (!tip.box || tip.box.hidden) return;
     tip.box.hidden = true;
-    tipSegNode = null;
+    tipAnchor = null;
   }
   function segAt(target, stack) {
     const node = target instanceof Element ? target.closest(".cg-seg") : null;
@@ -1952,7 +1950,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
           hideTip();
           return;
         }
-        if (tipSegNode !== node) showTip(node, event.clientX, event.clientY);
+        if (tipAnchor !== node) showSegTip(node, event.clientX, event.clientY);
         else positionTip(event.clientX, event.clientY);
       });
       stack.addEventListener("pointerleave", (event) => {
@@ -1965,8 +1963,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
           return;
         }
         if (event.pointerType === "touch") {
-          if (tipSegNode === node) hideTip();
-          else showTip(node, event.clientX, event.clientY);
+          if (tipAnchor === node) hideTip();
+          else showSegTip(node, event.clientX, event.clientY);
         }
       });
       const value = el2("span", "cg-col-value");
@@ -1992,6 +1990,19 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const cells = [];
     for (let i = 0; i < CALENDAR_CELLS; i++) {
       const cell = el2("div", "cg-cell");
+      cell.addEventListener("pointermove", (event) => {
+        if (event.pointerType === "touch" || !cell.cgDay) return;
+        if (tipAnchor !== cell) showDayTip(cell, event.clientX, event.clientY);
+        else positionTip(event.clientX, event.clientY);
+      });
+      cell.addEventListener("pointerleave", (event) => {
+        if (event.pointerType !== "touch") hideTip();
+      });
+      cell.addEventListener("pointerdown", (event) => {
+        if (event.pointerType !== "touch" || !cell.cgDay) return;
+        if (tipAnchor === cell) hideTip();
+        else showDayTip(cell, event.clientX, event.clientY);
+      });
       cell.hidden = true;
       grid.append(cell);
       cells.push(cell);
@@ -2102,7 +2113,12 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     foot.append(footRow);
     const badge = mountBadge(badgeSlot, { label: "" });
     badgeSlot.hidden = true;
-    const refreshButton = buildRefreshButton(refreshSlot);
+    const refreshButton = mountButton(refreshSlot, {
+      label: t("refresh"),
+      variant: "outline",
+      size: "xs",
+      onClick: () => void manualRefresh()
+    });
     content.append(head, cards, bannerSlot, bars, localSection, foot);
     root.append(spinnerWrap, emptyWrap, content);
     ui = {
@@ -2169,7 +2185,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       node.classList.toggle("is-top", i === topIndex);
       node.style.setProperty("--cg-color", MODEL_COLORS[seg.slot] ?? MODEL_COLORS[OTHER_SLOT]);
       node.style.height = `${heights[i]}px`;
-      node.setAttribute("aria-label", tipLines(node.cgSeg).join(" \xB7 "));
+      node.setAttribute("aria-label", segAriaText(node.cgSeg));
     });
   }
   function updateColumns(chart, local, models, rank, byDay) {
@@ -2284,12 +2300,18 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       const offset = i - leading;
       if (offset < 0 || offset >= count) {
         cell.hidden = true;
+        cell.cgDay = null;
         return;
       }
       cell.hidden = false;
       cell.style.gridColumn = String(i % COLUMN_COUNT + 1);
       cell.style.gridRow = String(Math.floor(i / COLUMN_COUNT) + 1);
       const cost = costs[offset];
+      const key = `${year}-${pad2(month + 1)}-${pad2(offset + 1)}`;
+      const row = lookup.get(key);
+      const models = row && Array.isArray(row.models) ? row.models.filter(isObj) : [];
+      cell.cgDay = row ? { key, date: new Date(year, month, offset + 1), row } : null;
+      cell.setAttribute("aria-label", `${key} \xB7 ${row ? money4(cost) : t("emptyDash")} \xB7 ${t("cellModels")(models.length)}`);
       cell.dataset.day = String(offset + 1);
       if (cost > 0 && max > 0) {
         const ratio = Math.min(1, cost / max) ** 0.7;
@@ -2412,8 +2434,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t("emptyDash");
     cards.success.sub.hidden = true;
     cards.cost.value.textContent = money4(num(usage.totalCost));
-    cards.cost.sub.textContent = `${money(num(usage.totalCredits))} ${t("creditsLabel")}`;
-    cards.cost.sub.hidden = false;
     cards.tokens.value.textContent = mtok(num(usage.tokens));
     cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t("tokensIn")} / ${mtok(num(usage.tokensOut))} ${t("tokensOut")}`;
     cards.tokens.sub.hidden = false;
@@ -2511,7 +2531,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     ui.emptyWrap.hidden = !(serviceDown || dataDown);
     ui.content.hidden = serviceDown || dataDown || !d;
     ui.spinnerWrap.hidden = !(state.loading && !d && !serviceDown && !dataDown);
-    ui.refreshButton.update({ loading: state.loading });
+    ui.refreshButton.update({ loading: state.loading, label: state.loading ? t("refreshBusy") : t("refresh") });
     if (d) {
       renderHeader(d);
       renderCards(d);
@@ -2618,7 +2638,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   }, 3e4);
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof Element ? event.target : null;
-    if (!target || !target.closest(".cg-seg")) hideTip();
+    if (!target || !target.closest(".cg-seg, .cg-cell")) hideTip();
   }, true);
   window.addEventListener("scroll", hideTip, { capture: true, passive: true });
 })();
