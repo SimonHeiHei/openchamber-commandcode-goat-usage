@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Goat</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  body { font-size: 0.875rem; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  [hidden] { display: none !important; }
+  #root { padding: 12px 12px 20px; }
+
+  .cg-shell { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+  .cg-head { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .cg-head-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .cg-spacer { flex: 1 1 auto; }
+  .cg-plan { font-family: var(--oc-mono); font-size: 0.8125rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cg-period { font-size: 0.75rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; }
+
+  .cg-bars { display: flex; flex-direction: column; gap: 12px; }
+  .cg-bar { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .cg-bar-sub { font-size: 0.75rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+  .cg-section { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .cg-sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .cg-sec-title { font-size: 0.8125rem; font-weight: 600; }
+  .cg-sec-note { font-size: 0.75rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; }
+  .cg-tabs { display: flex; min-width: 0; }
+
+  .cg-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 8px 12px; border: 1px solid var(--oc-border); border-radius: var(--oc-radius); background: var(--oc-elevated); }
+  .cg-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .cg-stat-label { font-size: 0.6875rem; color: var(--oc-muted); }
+  .cg-stat-value { font-size: 0.875rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cg-stats-note { font-size: 0.6875rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+  .cg-foot { display: flex; flex-direction: column; gap: 4px; }
+  .cg-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .cg-foot-note { font-size: 0.6875rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; }
+  .cg-lifetime .oc-sdk { font-size: 0.75rem; }
+  .cg-lifetime .oc-sdk-text { color: var(--oc-muted); }
+
+  .cg-state { padding-top: 8px; }
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script src="./main.js"></script>
+</body>
+</html>

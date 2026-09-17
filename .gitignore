@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+
+# panel/main.js is intentionally committed: the OpenChamber host never compiles
+# a guest package, so the built bundle must ship in the repository.

@@ -1,0 +1,51 @@
+{
+  "name": "openchamber-commandcode-goat-usage",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CommandCode Goat subscription quota and local OpenCode token cost, as an OpenChamber extension",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SimonHeiHei/openchamber-commandcode-goat-usage.git"
+  },
+  "keywords": [
+    "openchamber",
+    "openchamber-extension",
+    "commandcode",
+    "goat",
+    "usage",
+    "quota",
+    "opencode"
+  ],
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "build": "esbuild panel/src/main.js --bundle --format=iife --platform=browser --outfile=panel/main.js",
+    "check": "node --check panel/main.js && node --check service/main.js"
+  },
+  "devDependencies": {
+    "@openchamber/sdk": "1.24.0",
+    "esbuild": "0.28.2"
+  },
+  "openchamber": {
+    "apiVersion": 1,
+    "engines": {
+      "openchamber": ">=1.24.0"
+    },
+    "contributes": {
+      "panel": {
+        "id": "cc-goat",
+        "name": "CommandCode Goat",
+        "icon": "icon.svg",
+        "entry": "panel/index.html"
+      },
+      "attach": false,
+      "service": {
+        "entry": "service/main.js",
+        "runtime": "host"
+      }
+    }
+  }
+}
