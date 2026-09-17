@@ -1581,6 +1581,23 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       updatedPrefix: "\u66F4\u65B0\u4E8E",
       updatedUnknown: "\u66F4\u65B0\u65F6\u95F4\u672A\u77E5",
       noticePartial: (count) => `\u90E8\u5206\u6570\u636E\u4E0D\u53EF\u7528\uFF08${count}\uFF09`,
+      noticeStale: "\u663E\u793A\u7684\u662F\u4E0A\u6B21\u7ED3\u679C\uFF0C\u5237\u65B0\u5931\u8D25",
+      noticeRetryHint: "\u70B9\u300C\u5237\u65B0\u300D\u91CD\u8BD5",
+      errSourceSubscriptions: "\u8BA2\u9605",
+      errSourceCredits: "\u989D\u5EA6",
+      errSourceUsage: "\u7528\u91CF",
+      errSourceApi: "API \u5BC6\u94A5",
+      errSourceDb: "\u672C\u5730\u6570\u636E\u5E93",
+      errSourceUnknown: "\u672A\u77E5\u6765\u6E90",
+      errKindTimeout: "\u8BF7\u6C42\u8D85\u65F6",
+      errKindNetwork: "\u7F51\u7EDC\u8FDE\u63A5\u5931\u8D25",
+      errKindHttp: (status) => `\u4E0A\u6E38\u8FD4\u56DE HTTP ${status}`,
+      errKindAuth: "\u8BA4\u8BC1\u5931\u8D25",
+      errKindData: "\u54CD\u5E94\u683C\u5F0F\u9519\u8BEF",
+      errKindKey: "\u672A\u627E\u5230 API \u5BC6\u94A5",
+      errKindDb: "\u672C\u5730\u6570\u636E\u5E93\u8BFB\u53D6\u5931\u8D25",
+      errKindUnknown: "\u672A\u77E5\u9519\u8BEF",
+      errLegacy: (source, message) => `${source}\uFF1A${message}`,
       noticeMissingPrefix: "\u90E8\u5206\u6570\u636E\u7F3A\u5931\uFF1A",
       missingPlan: "\u8BA2\u9605",
       missingQuota: "\u989D\u5EA6",
@@ -1655,6 +1672,23 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       updatedPrefix: "Updated",
       updatedUnknown: "Update time unknown",
       noticePartial: (count) => `partial data unavailable (${count})`,
+      noticeStale: "showing the previous result \u2014 refresh failed",
+      noticeRetryHint: "use Refresh to retry",
+      errSourceSubscriptions: "subscriptions",
+      errSourceCredits: "credits",
+      errSourceUsage: "usage",
+      errSourceApi: "API key",
+      errSourceDb: "local database",
+      errSourceUnknown: "unknown source",
+      errKindTimeout: "request timed out",
+      errKindNetwork: "connection failed",
+      errKindHttp: (status) => `upstream HTTP ${status}`,
+      errKindAuth: "authentication failed",
+      errKindData: "invalid response",
+      errKindKey: "API key missing",
+      errKindDb: "local database read failed",
+      errKindUnknown: "unknown error",
+      errLegacy: (source, message) => `${source}: ${message}`,
       noticeMissingPrefix: "missing data: ",
       missingPlan: "plan",
       missingQuota: "quota",
@@ -2050,6 +2084,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const bannerSlot = el2("div");
     bannerSlot.hidden = true;
     const banner = mountBanner(bannerSlot, { tone: "warning", title: "" });
+    const bannerNode = bannerSlot.firstElementChild;
+    if (bannerNode) bannerNode.classList.add("cg-banner");
     const cards = el2("div", "cg-cards");
     const cardRequests = buildCard(t("cardRequests"));
     const cardSuccess = buildCard(t("cardSuccess"));
@@ -2131,6 +2167,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       badge,
       periodLine,
       bannerSlot,
+      bannerNode,
       banner,
       cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
       fiveHour,
@@ -2489,6 +2526,41 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   function renderFooter(d) {
     ui.updatedLine.textContent = d.generatedAt ? `${t("updatedPrefix")} ${timeText(d.generatedAt)}` : t("updatedUnknown");
   }
+  var ERROR_SOURCES = /* @__PURE__ */ new Map([
+    ["subscriptions", "errSourceSubscriptions"],
+    ["credits", "errSourceCredits"],
+    ["usage", "errSourceUsage"],
+    ["api", "errSourceApi"],
+    ["db", "errSourceDb"]
+  ]);
+  var ERROR_KINDS = /* @__PURE__ */ new Map([
+    ["timeout", "errKindTimeout"],
+    ["network", "errKindNetwork"],
+    ["auth", "errKindAuth"],
+    ["data", "errKindData"],
+    ["key", "errKindKey"],
+    ["db", "errKindDb"],
+    ["unknown", "errKindUnknown"]
+  ]);
+  var errorSourceText = (source) => t(ERROR_SOURCES.get(source) ?? "errSourceUnknown");
+  var errorKindText = (entry) => {
+    const kind = typeof entry.kind === "string" ? entry.kind : "";
+    if (kind === "http") return t("errKindHttp")(isNum(entry.status) ? String(entry.status) : t("emptyDash"));
+    const key = ERROR_KINDS.get(kind);
+    return key ? t(key) : null;
+  };
+  var errorReasonText = (entry) => {
+    const kind = errorKindText(entry);
+    const message = typeof entry.message === "string" && entry.message ? entry.message : t("unknownError");
+    if (!kind) return t("errLegacy")(errorSourceText(entry.source), message);
+    return `${errorSourceText(entry.source)}${t("metaSep")}${kind}`;
+  };
+  var errorRawText = (entry) => `${typeof entry.source === "string" ? entry.source : "?"}: ${typeof entry.message === "string" ? entry.message : t("unknownError")}`;
+  function setBannerDetail(text) {
+    if (!ui.bannerNode) return;
+    if (text) ui.bannerNode.setAttribute("title", text);
+    else ui.bannerNode.removeAttribute("title");
+  }
   function renderNotice(d) {
     const errors = d && Array.isArray(d.errors) ? d.errors.filter(isObj) : [];
     const missing = !d ? [] : [
@@ -2497,9 +2569,16 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       !isObj(d.periodUsage) ? t("missingPeriodUsage") : null,
       !isObj(d.local) ? t("missingLocal") : null
     ].filter(Boolean);
+    setBannerDetail("");
     if (errors.length > 0) {
-      const body = errors.map((e) => `${typeof e.source === "string" ? `${e.source}: ` : ""}${typeof e.message === "string" ? e.message : t("unknownError")}`).join(t("errorSep"));
-      ui.banner.update({ tone: "warning", title: t("noticePartial")(errors.length), body });
+      const allStale = errors.every((entry) => entry.stale === true);
+      const reasons = errors.map(errorReasonText).join(t("errorSep"));
+      setBannerDetail(errors.map(errorRawText).join(t("errorSep")));
+      ui.banner.update({
+        tone: allStale ? "info" : "warning",
+        title: allStale ? t("noticeStale") : t("noticePartial")(errors.length),
+        body: `${reasons}${t("metaSep")}${t("noticeRetryHint")}`
+      });
       ui.bannerSlot.hidden = false;
       return;
     }

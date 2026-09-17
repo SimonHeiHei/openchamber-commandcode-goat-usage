@@ -124,18 +124,66 @@ function readApiKey() {
 // fetch is still recorded as an error, so the panel shows the data it has plus a notice.
 const upstreamCache = new Map();
 const upstreamRefreshing = new Map(); // route -> in-flight background refresh (at most one per route)
+const upstreamHealing = new Set(); // route -> self-heal revalidation queued (at most one per route)
 
-// One upstream GET, storing the parsed body on success. Rejects on any failure; callers decide how to
-// degrade. The key is only ever sent in the Authorization header, never in a message.
-async function fetchUpstream(key, route) {
+// CONTRACT-v4 error taxonomy. classifyError must never throw: an unclassifiable failure must not mask
+// the original error, so any unexpected shape degrades to `unknown` instead of propagating.
+const AUTH_STATUSES = new Set([401, 403]);
+function classifyError(err) {
+  try {
+    if (!err || typeof err !== 'object') return { kind: 'unknown' };
+    if (err.name === 'AbortError' || err.name === 'TimeoutError') return { kind: 'timeout' };
+    const status = Number(err.status);
+    if (Number.isInteger(status) && status > 0) {
+      return AUTH_STATUSES.has(status) ? { kind: 'auth', status } : { kind: 'http', status };
+    }
+    if (err.name === 'SyntaxError') return { kind: 'data' };
+    // undici wraps DNS/TLS/socket failures in a TypeError whose message is "fetch failed".
+    return { kind: 'network' };
+  } catch {
+    return { kind: 'unknown' };
+  }
+}
+
+// One upstream GET. Non-ok responses carry the status so the caller can classify http vs auth; a
+// non-JSON body surfaces as a SyntaxError (kind `data`). The key is only ever sent in the
+// Authorization header, never in a message.
+async function fetchUpstreamOnce(key, route) {
   const res = await fetch(`${API_BASE}${route}`, {
     headers: { Authorization: `Bearer ${key}`, 'User-Agent': USER_AGENT },
     signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`);
-  const value = await res.json();
-  upstreamCache.set(route, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-  return value;
+  if (!res.ok) {
+    const err = new Error(`upstream returned HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+// Retry policy: at most ONE retry, only for a fast, non-auth, non-timeout failure. The 17 s per-call
+// timeout is the whole blocking budget (the host kills at 20 s), so a timeout can never be retried and
+// only a fast failure (a few ms of overhead) may be retried once after a short pause.
+const RETRY_MAX_ELAPSED_MS = 3000;
+const RETRY_PAUSE_MS = 400;
+const HEAL_DELAY_MS = 2000;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchUpstream(key, route) {
+  const startedAt = Date.now();
+  try {
+    const value = await fetchUpstreamOnce(key, route);
+    upstreamCache.set(route, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+    return value;
+  } catch (err) {
+    const { kind } = classifyError(err);
+    const elapsed = Date.now() - startedAt;
+    if (kind === 'timeout' || kind === 'auth' || elapsed >= RETRY_MAX_ELAPSED_MS) throw err;
+    await delay(RETRY_PAUSE_MS);
+    const value = await fetchUpstreamOnce(key, route);
+    upstreamCache.set(route, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+    return value;
+  }
 }
 
 // Revalidate a route behind the caller's back. At most one refresh per route is in flight; the
@@ -149,6 +197,18 @@ function refreshUpstream(key, route) {
   upstreamRefreshing.set(route, inFlight);
 }
 
+// Cold-failure self-healing: a blocking fetch that failed with nothing to serve queues ONE background
+// revalidation a couple of seconds later, so the next request finds a warm cache without the user
+// clicking refresh. One heal is queued per route and refreshUpstream keeps at most one in flight.
+function scheduleHeal(key, route) {
+  if (upstreamHealing.has(route)) return;
+  upstreamHealing.add(route);
+  setTimeout(() => {
+    upstreamHealing.delete(route);
+    refreshUpstream(key, route);
+  }, HEAL_DELAY_MS).unref();
+}
+
 async function apiGet(key, route, fresh = false) {
   const cached = upstreamCache.get(route);
 
@@ -156,10 +216,11 @@ async function apiGet(key, route, fresh = false) {
   // (plus the caller's errors[] entry) so a section the user can still see is never blanked.
   if (fresh) {
     try {
-      return { ok: true, value: await fetchUpstream(key, route), error: null };
+      return { ok: true, value: await fetchUpstream(key, route), error: null, stale: false };
     } catch (err) {
-      if (cached) return { ok: true, value: cached.value, error: err };
-      return { ok: false, value: null, error: err };
+      if (cached) return { ok: true, value: cached.value, error: err, stale: true };
+      scheduleHeal(key, route);
+      return { ok: false, value: null, error: err, stale: false };
     }
   }
 
@@ -167,15 +228,26 @@ async function apiGet(key, route, fresh = false) {
   // background — no errors[] entry, because the caller got usable data.
   if (cached) {
     if (cached.expiresAt <= Date.now()) refreshUpstream(key, route);
-    return { ok: true, value: cached.value, error: null };
+    return { ok: true, value: cached.value, error: null, stale: false };
   }
 
   // Cold cache: nothing to show, so this call must block on the fetch.
   try {
-    return { ok: true, value: await fetchUpstream(key, route), error: null };
+    return { ok: true, value: await fetchUpstream(key, route), error: null, stale: false };
   } catch (err) {
-    return { ok: false, value: null, error: err };
+    scheduleHeal(key, route);
+    return { ok: false, value: null, error: err, stale: false };
   }
+}
+
+// Turn an upstream failure result into a CONTRACT-v4 errors[] entry. `message` stays raw (and
+// key-scrubbed) for debugging; `kind`/`status` drive the localized panel text, `stale` says whether a
+// last-known-good value was served alongside it.
+function upstreamError(source, res, key) {
+  const { kind, status } = classifyError(res.error);
+  const entry = { source, message: safeMessage(res.error, key), kind, stale: res.stale === true };
+  if (status !== undefined) entry.status = status;
+  return entry;
 }
 
 // --- upstream mappers (exact CONTRACT shapes) -------------------------------
@@ -442,7 +514,7 @@ async function buildSummary(range, fresh) {
   try {
     local = await queryLocal(range);
   } catch (err) {
-    errors.push({ source: 'db', message: safeMessage(err) });
+    errors.push({ source: 'db', message: safeMessage(err), kind: 'db', stale: false });
   }
   // Evidence that a range switch is served from the in-memory aggregation: localQueryCount only
   // advances when the single (day, model) pass actually runs.
@@ -457,7 +529,7 @@ async function buildSummary(range, fresh) {
   let periodUsage = null;
 
   if (keyError) {
-    errors.push({ source: 'api', message: keyError });
+    errors.push({ source: 'api', message: keyError, kind: 'key', stale: false });
   } else {
     const [sub, cred, usage] = await Promise.all([
       apiGet(key, '/alpha/billing/subscriptions', fresh),
@@ -465,14 +537,14 @@ async function buildSummary(range, fresh) {
       apiGet(key, '/alpha/usage/summary', fresh),
     ]);
     if (sub.ok) plan = mapPlan(sub.value);
-    if (sub.error) errors.push({ source: 'subscriptions', message: safeMessage(sub.error, key) });
+    if (sub.error) errors.push(upstreamError('subscriptions', sub, key));
     if (cred.ok) {
       credits = mapCreditsCredits(cred.value);
       windows = mapWindows(cred.value);
     }
-    if (cred.error) errors.push({ source: 'credits', message: safeMessage(cred.error, key) });
+    if (cred.error) errors.push(upstreamError('credits', cred, key));
     if (usage.ok) periodUsage = mapPeriodUsage(usage.value);
-    if (usage.error) errors.push({ source: 'usage', message: safeMessage(usage.error, key) });
+    if (usage.error) errors.push(upstreamError('usage', usage, key));
   }
 
   return { generatedAt: Date.now(), range, plan, credits, windows, periodUsage, local, errors };
@@ -515,7 +587,7 @@ const server = http.createServer(async (req, res) => {
         windows: null,
         periodUsage: null,
         local: null,
-        errors: [{ source: 'api', message: safeMessage(err) }],
+        errors: [{ source: 'api', message: safeMessage(err), kind: 'unknown', stale: false }],
       });
     }
     return;

@@ -68,6 +68,23 @@ const MESSAGES = {
     updatedPrefix: '更新于',
     updatedUnknown: '更新时间未知',
     noticePartial: (count) => `部分数据不可用（${count}）`,
+    noticeStale: '显示的是上次结果，刷新失败',
+    noticeRetryHint: '点「刷新」重试',
+    errSourceSubscriptions: '订阅',
+    errSourceCredits: '额度',
+    errSourceUsage: '用量',
+    errSourceApi: 'API 密钥',
+    errSourceDb: '本地数据库',
+    errSourceUnknown: '未知来源',
+    errKindTimeout: '请求超时',
+    errKindNetwork: '网络连接失败',
+    errKindHttp: (status) => `上游返回 HTTP ${status}`,
+    errKindAuth: '认证失败',
+    errKindData: '响应格式错误',
+    errKindKey: '未找到 API 密钥',
+    errKindDb: '本地数据库读取失败',
+    errKindUnknown: '未知错误',
+    errLegacy: (source, message) => `${source}：${message}`,
     noticeMissingPrefix: '部分数据缺失：',
     missingPlan: '订阅',
     missingQuota: '额度',
@@ -142,6 +159,23 @@ const MESSAGES = {
     updatedPrefix: 'Updated',
     updatedUnknown: 'Update time unknown',
     noticePartial: (count) => `partial data unavailable (${count})`,
+    noticeStale: 'showing the previous result — refresh failed',
+    noticeRetryHint: 'use Refresh to retry',
+    errSourceSubscriptions: 'subscriptions',
+    errSourceCredits: 'credits',
+    errSourceUsage: 'usage',
+    errSourceApi: 'API key',
+    errSourceDb: 'local database',
+    errSourceUnknown: 'unknown source',
+    errKindTimeout: 'request timed out',
+    errKindNetwork: 'connection failed',
+    errKindHttp: (status) => `upstream HTTP ${status}`,
+    errKindAuth: 'authentication failed',
+    errKindData: 'invalid response',
+    errKindKey: 'API key missing',
+    errKindDb: 'local database read failed',
+    errKindUnknown: 'unknown error',
+    errLegacy: (source, message) => `${source}: ${message}`,
     noticeMissingPrefix: 'missing data: ',
     missingPlan: 'plan',
     missingQuota: 'quota',
@@ -570,6 +604,8 @@ function buildUi() {
   const bannerSlot = el('div');
   bannerSlot.hidden = true;
   const banner = mountBanner(bannerSlot, { tone: 'warning', title: '' });
+  const bannerNode = bannerSlot.firstElementChild;
+  if (bannerNode) bannerNode.classList.add('cg-banner');
 
   const cards = el('div', 'cg-cards');
   const cardRequests = buildCard(t('cardRequests'));
@@ -640,7 +676,7 @@ function buildUi() {
   content.append(head, cards, bannerSlot, bars, localSection, foot);
   root.append(spinnerWrap, emptyWrap, content);
   ui = {
-    spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine, bannerSlot,
+    spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine, bannerSlot, bannerNode,
     banner, cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
     fiveHour, weekly, monthly, tabs, localRange, statTurns, statTokens, statCost,
     statsNote, localNote, daySepSlot, dayChartSlot, columns, calendar, modelSepSlot, models,
@@ -981,16 +1017,55 @@ function renderFooter(d) {
   ui.updatedLine.textContent = d.generatedAt ? `${t('updatedPrefix')} ${timeText(d.generatedAt)}` : t('updatedUnknown');
 }
 
+/* upstream errors (contract v4) — a localized `section · kind` never shows the raw message;
+ * the raw strings live only on the banner's hover detail for bug reports */
+const ERROR_SOURCES = new Map([
+  ['subscriptions', 'errSourceSubscriptions'], ['credits', 'errSourceCredits'], ['usage', 'errSourceUsage'],
+  ['api', 'errSourceApi'], ['db', 'errSourceDb'],
+]);
+const ERROR_KINDS = new Map([
+  ['timeout', 'errKindTimeout'], ['network', 'errKindNetwork'], ['auth', 'errKindAuth'],
+  ['data', 'errKindData'], ['key', 'errKindKey'], ['db', 'errKindDb'], ['unknown', 'errKindUnknown'],
+]);
+const errorSourceText = (source) => t(ERROR_SOURCES.get(source) ?? 'errSourceUnknown');
+const errorKindText = (entry) => {
+  const kind = typeof entry.kind === 'string' ? entry.kind : '';
+  if (kind === 'http') return t('errKindHttp')(isNum(entry.status) ? String(entry.status) : t('emptyDash'));
+  const key = ERROR_KINDS.get(kind);
+  return key ? t(key) : null;
+};
+const errorReasonText = (entry) => {
+  const kind = errorKindText(entry);
+  const message = typeof entry.message === 'string' && entry.message ? entry.message : t('unknownError');
+  if (!kind) return t('errLegacy')(errorSourceText(entry.source), message);
+  return `${errorSourceText(entry.source)}${t('metaSep')}${kind}`;
+};
+const errorRawText = (entry) =>
+  `${typeof entry.source === 'string' ? entry.source : '?'}: ${typeof entry.message === 'string' ? entry.message : t('unknownError')}`;
+
+function setBannerDetail(text) {
+  if (!ui.bannerNode) return;
+  if (text) ui.bannerNode.setAttribute('title', text);
+  else ui.bannerNode.removeAttribute('title');
+}
+
 function renderNotice(d) {
   const errors = d && Array.isArray(d.errors) ? d.errors.filter(isObj) : [];
   const missing = !d ? [] : [
     !isObj(d.plan) ? t('missingPlan') : null, !isObj(d.windows) && !isObj(d.credits) ? t('missingQuota') : null,
     !isObj(d.periodUsage) ? t('missingPeriodUsage') : null, !isObj(d.local) ? t('missingLocal') : null,
   ].filter(Boolean);
+  setBannerDetail('');
 
   if (errors.length > 0) {
-    const body = errors.map((e) => `${typeof e.source === 'string' ? `${e.source}: ` : ''}${typeof e.message === 'string' ? e.message : t('unknownError')}`).join(t('errorSep'));
-    ui.banner.update({ tone: 'warning', title: t('noticePartial')(errors.length), body });
+    const allStale = errors.every((entry) => entry.stale === true);
+    const reasons = errors.map(errorReasonText).join(t('errorSep'));
+    setBannerDetail(errors.map(errorRawText).join(t('errorSep')));
+    ui.banner.update({
+      tone: allStale ? 'info' : 'warning',
+      title: allStale ? t('noticeStale') : t('noticePartial')(errors.length),
+      body: `${reasons}${t('metaSep')}${t('noticeRetryHint')}`,
+    });
     ui.bannerSlot.hidden = false;
     return;
   }

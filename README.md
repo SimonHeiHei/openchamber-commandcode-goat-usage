@@ -96,6 +96,7 @@ Releases: bump `version` in `package.json`. That is the value OpenChamber compar
 |---|---|
 | "Local service not ready" | the `service` capability was not approved, or the service failed to start. Re-approve it in Settings → Extensions. |
 | Quota bars missing, a notice instead | no CommandCode key in `auth.json`, or the upstream request failed. Local cost still works. |
+| A notice saying the previous result is being shown | the upstream (or your network) hiccupped during a refresh. A failed request is retried once and the service revalidates in the background, so this usually clears on its own — or press Refresh. Hover the notice to see the raw upstream reason. |
 | Local cost empty | no OpenCode activity in the selected range, or the database could not be read. |
 | Install refused: `host-too-old` | OpenChamber is older than 1.24.0. |
 | Install refused: `missing-build` | `panel/main.js` is absent — install a release tag rather than a branch where the build was never run. |
