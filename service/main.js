@@ -224,6 +224,7 @@ function mapWindows(credits) {
 function mapPeriodUsage(s) {
   return {
     totalCost: round4(s?.totalCost ?? 0),
+    totalCredits: round4(s?.totalCredits ?? 0),
     totalCount: num(s?.totalCount),
     successRate: round(s?.successRate ?? 0, 2),
     failedCount: num(s?.failedCount),
@@ -234,10 +235,12 @@ function mapPeriodUsage(s) {
 }
 
 // --- local OpenCode cost (SQL semantics ported from cc-usage) ---------------
-// The whole history is aggregated ONCE into one row per (day, model); every range is then a pure
-// in-memory filter/sum over those rows, so switching today/week/month/all costs zero SQL. On a
-// 1.2 GB DB (~12k assistant rows) the single pass is ~70 ms and yields ~130 groups. The cache is
-// keyed on the DB file's mtimeMs+size and additionally floored to one rescan per
+// The whole history is aggregated ONCE into one row per (day, model, session_id); every range is then
+// a pure in-memory filter/sum over those rows, so switching today/week/month/all costs zero SQL. On a
+// 1.2 GB DB the single fine-grained pass is ~80-120 ms and yields ~449 groups. The session grain is
+// what makes the per-range distinct-session counts exact: summing per-(day, model) distinct counts
+// would double-count a session that spans days, whereas Set-building over the fine grain does not.
+// The cache is keyed on the DB file's mtimeMs+size and additionally floored to one rescan per
 // LOCAL_RESCAN_FLOOR_MS, so rapid tab switching (or messages streaming in) cannot re-scan in a storm.
 const LOCAL_RESCAN_FLOOR_MS = 5000;
 const LOCAL_DAYS_CAP = 31;
@@ -255,19 +258,23 @@ function openDb(DatabaseSync) {
 }
 
 // One pass over assistant rows, no date filter: the per-group counters are cached so a range
-// total is a plain sum of its groups and stays exact.
+// total is a plain sum of its groups and stays exact. The (day, model, session_id) grain keeps each
+// session separate so distinct-session counts can be built exactly by Set while slicing in JS.
 const LOCAL_AGGREGATE_SQL = `
   select date(m.time_created/1000,'unixepoch','localtime') as day,
     json_extract(m.data,'$.modelID') as model,
+    m.session_id as session,
     count(*) as turns,
     coalesce(sum(json_extract(m.data,'$.tokens.input')),0) as input,
     coalesce(sum(json_extract(m.data,'$.tokens.output')),0) as output,
     coalesce(sum(json_extract(m.data,'$.tokens.reasoning')),0) as reasoning,
     coalesce(sum(json_extract(m.data,'$.tokens.cache.read')),0) as cache_read,
-    coalesce(sum(json_extract(m.data,'$.cost')),0) as cost
+    coalesce(sum(json_extract(m.data,'$.tokens.cache.write')),0) as cache_write,
+    coalesce(sum(json_extract(m.data,'$.cost')),0) as cost,
+    sum(case when json_extract(m.data,'$.error') is not null then 1 else 0 end) as failed
   from message m
   where json_extract(m.data,'$.role')='assistant'
-  group by 1, 2`;
+  group by 1, 2, 3`;
 
 async function loadLocalAggregates() {
   const DatabaseSync = await loadSqlite();
@@ -301,32 +308,56 @@ const byCostThenTurns = (a, b) =>
   b.cost - a.cost || b.turns - a.turns || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0);
 
 // Pure range projection: filter the cached groups to [from, to] and sum in JS — no SQL here.
+// Sessions are accumulated into Sets (global, per-model, per-day-model) so distinct counts are exact
+// over the whole range rather than a sum of per-day distinct counts.
 function localForRange(rows, range) {
   const { from, to } = rangeBounds(range);
-  const totals = { turns: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cost: 0 };
-  const days = new Map(); // day -> { day, turns, cost, models: Map(model -> { model, turns, cost }) }
-  const models = new Map(); // model -> { model, turns, cost }
+  const totals = {
+    turns: 0,
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache_read: 0,
+    cache_write: 0,
+    cost: 0,
+    failed: 0,
+    sessions: new Set(),
+  };
+  const days = new Map(); // day -> { day, turns, cost, models: Map(model -> entry) }
+  const models = new Map(); // model -> entry
   for (const row of rows) {
     if (row.day < from || row.day > to) continue;
     const turns = num(row.turns);
     const cost = num(row.cost);
+    const input = num(row.input);
+    const output = num(row.output);
+    const reasoning = num(row.reasoning);
+    const cacheRead = num(row.cache_read);
+    const cacheWrite = num(row.cache_write);
+    const failed = num(row.failed);
+    const session = row.session;
     totals.turns += turns;
-    totals.input += num(row.input);
-    totals.output += num(row.output);
-    totals.reasoning += num(row.reasoning);
-    totals.cache_read += num(row.cache_read);
+    totals.input += input;
+    totals.output += output;
+    totals.reasoning += reasoning;
+    totals.cache_read += cacheRead;
+    totals.cache_write += cacheWrite;
     totals.cost += cost;
+    totals.failed += failed;
+    if (session != null) totals.sessions.add(session);
     const day = days.get(row.day) ?? { day: row.day, turns: 0, cost: 0, models: new Map() };
     day.turns += turns;
     day.cost += cost;
-    const dayModel = day.models.get(row.model) ?? { model: row.model, turns: 0, cost: 0 };
+    const dayModel = day.models.get(row.model) ?? newModelEntry(row.model);
     dayModel.turns += turns;
     dayModel.cost += cost;
+    addCounters(dayModel, input, output, reasoning, cacheRead, cacheWrite, failed, session);
     day.models.set(row.model, dayModel);
     days.set(row.day, day);
-    const model = models.get(row.model) ?? { model: row.model, turns: 0, cost: 0 };
+    const model = models.get(row.model) ?? newModelEntry(row.model);
     model.turns += turns;
     model.cost += cost;
+    addCounters(model, input, output, reasoning, cacheRead, cacheWrite, failed, session);
     models.set(row.model, model);
   }
   return {
@@ -338,7 +369,10 @@ function localForRange(rows, range) {
       output: totals.output,
       reasoning: totals.reasoning,
       cache_read: totals.cache_read,
+      cache_write: totals.cache_write,
       cost: round4(totals.cost),
+      sessions: totals.sessions.size,
+      failed: totals.failed,
     },
     // Most recent LOCAL_DAYS_CAP days, ascending: sort ascending then keep the tail (oldest-31
     // would silently drop the newest days once the history exceeds the cap).
@@ -349,14 +383,49 @@ function localForRange(rows, range) {
         day: d.day,
         turns: d.turns,
         cost: round4(d.cost),
-        models: [...d.models.values()]
-          .sort(byCostThenTurns)
-          .map((m) => ({ model: m.model, turns: m.turns, cost: round4(m.cost) })),
+        models: [...d.models.values()].sort(byCostThenTurns).map(modelRow),
       })),
-    byModel: [...models.values()]
-      .sort(byCostThenTurns)
-      .slice(0, LOCAL_MODELS_CAP)
-      .map((m) => ({ model: m.model, turns: m.turns, cost: round4(m.cost) })),
+    byModel: [...models.values()].sort(byCostThenTurns).slice(0, LOCAL_MODELS_CAP).map(modelRow),
+  };
+}
+
+function newModelEntry(model) {
+  return {
+    model,
+    turns: 0,
+    cost: 0,
+    input: 0,
+    output: 0,
+    reasoning: 0,
+    cache_read: 0,
+    cache_write: 0,
+    failed: 0,
+    sessions: new Set(),
+  };
+}
+
+function addCounters(entry, input, output, reasoning, cacheRead, cacheWrite, failed, session) {
+  entry.input += input;
+  entry.output += output;
+  entry.reasoning += reasoning;
+  entry.cache_read += cacheRead;
+  entry.cache_write += cacheWrite;
+  entry.failed += failed;
+  if (session != null) entry.sessions.add(session);
+}
+
+function modelRow(m) {
+  return {
+    model: m.model,
+    turns: m.turns,
+    cost: round4(m.cost),
+    input: m.input,
+    output: m.output,
+    reasoning: m.reasoning,
+    cache_read: m.cache_read,
+    cache_write: m.cache_write,
+    sessions: m.sessions.size,
+    failed: m.failed,
   };
 }
 

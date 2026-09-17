@@ -1512,89 +1512,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     };
   };
 
-  // node_modules/@openchamber/sdk/dist/ui/text.js
-  var MARKDOWN_TOKEN = /(!?)\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g;
-  var isHttpUrl = (value) => {
-    try {
-      const url = new URL(value);
-      return url.protocol === "http:" || url.protocol === "https:";
-    } catch {
-      return false;
-    }
-  };
-  var splitTextMedia = (text) => {
-    const parts = [];
-    let last = 0;
-    for (const match of text.matchAll(MARKDOWN_TOKEN)) {
-      const index = match.index ?? 0;
-      if (index > last) {
-        parts.push({ kind: "text", text: text.slice(last, index) });
-      }
-      const marker = match[1] ?? "";
-      const label = (match[2] ?? "").trim();
-      const href = match[3] ?? "";
-      if (!isHttpUrl(href)) {
-        parts.push({ kind: "text", text: match[0] });
-      } else if (marker === "!") {
-        parts.push({ kind: "image", src: href, alt: label });
-      } else {
-        parts.push({ kind: "link", href, label: label || href });
-      }
-      last = index + match[0].length;
-    }
-    if (last < text.length) {
-      parts.push({ kind: "text", text: text.slice(last) });
-    }
-    return parts;
-  };
-  var mountText = (root, initial) => {
-    ensureStyle(UI_CSS);
-    let props = initial;
-    const node = el("div", "oc-sdk oc-sdk-text");
-    root.append(node);
-    const onClick = (event) => {
-      if (!(event.target instanceof HTMLAnchorElement) || !props.onOpenUrl) {
-        return;
-      }
-      event.preventDefault();
-      props.onOpenUrl(event.target.href);
-    };
-    const paint = () => {
-      clearNode(node);
-      for (const part of splitTextMedia(props.text)) {
-        if (part.kind === "text") {
-          node.append(document.createTextNode(part.text));
-        } else if (part.kind === "link") {
-          const link = el("a");
-          link.href = part.href;
-          link.rel = "noopener noreferrer";
-          link.target = "_blank";
-          link.textContent = part.label;
-          node.append(link);
-        } else {
-          const img = el("img");
-          img.src = part.src;
-          img.alt = part.alt;
-          img.loading = "lazy";
-          img.referrerPolicy = "no-referrer";
-          node.append(img);
-        }
-      }
-    };
-    node.addEventListener("click", onClick);
-    paint();
-    return {
-      update: (next) => {
-        props = { ...props, ...next };
-        paint();
-      },
-      dispose: () => {
-        node.removeEventListener("click", onClick);
-        node.remove();
-      }
-    };
-  };
-
   // panel/src/main.js
   var host = connectHost();
   var SERVICE_CODES = /* @__PURE__ */ new Set([
@@ -1624,6 +1541,19 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       resetInHours: (hour) => `${hour} \u5C0F\u65F6\u540E\u91CD\u7F6E`,
       resetInMinutes: (minute) => `${minute} \u5206\u949F\u540E\u91CD\u7F6E`,
       periodEnds: "\u5468\u671F\u81F3",
+      cardRequests: "\u8BF7\u6C42",
+      cardSuccess: "\u6210\u529F\u7387",
+      cardCost: "\u82B1\u8D39",
+      cardTokens: "Token",
+      cardFailed: (count) => `\u5931\u8D25 ${count}`,
+      creditsLabel: "credits",
+      metaTurns: (count) => `${count} \u8F6E`,
+      metaSessions: (count) => `${count} \u5BF9\u8BDD`,
+      metaTokens: (value) => `${value} tokens`,
+      metaCached: (pct) => `\u7F13\u5B58 ${pct}`,
+      metaSep: " \xB7 ",
+      statSessions: "\u5BF9\u8BDD",
+      statFailed: "\u5931\u8D25",
       localCost: "\u672C\u5730\u6210\u672C",
       tabToday: "\u4ECA\u65E5",
       tabWeek: "\u672C\u5468",
@@ -1648,8 +1578,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       unknownModel: "\u672A\u77E5\u6A21\u578B",
       updatedPrefix: "\u66F4\u65B0\u4E8E",
       updatedUnknown: "\u66F4\u65B0\u65F6\u95F4\u672A\u77E5",
-      lifetimeUnavailable: "\u7D2F\u8BA1\u7528\u91CF\u4E0D\u53EF\u7528",
-      lifetime: (count, rate, tokens) => `\u7D2F\u8BA1 ${count} \u6B21 \xB7 \u6210\u529F\u7387 ${rate} \xB7 ${tokens} tokens`,
       noticePartial: (count) => `\u90E8\u5206\u6570\u636E\u4E0D\u53EF\u7528\uFF08${count}\uFF09`,
       noticeMissingPrefix: "\u90E8\u5206\u6570\u636E\u7F3A\u5931\uFF1A",
       missingPlan: "\u8BA2\u9605",
@@ -1685,6 +1613,19 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       resetInHours: (hour) => `resets in ${hour}h`,
       resetInMinutes: (minute) => `resets in ${minute}m`,
       periodEnds: "period ends",
+      cardRequests: "Requests",
+      cardSuccess: "Success",
+      cardCost: "Cost",
+      cardTokens: "Tokens",
+      cardFailed: (count) => `${count} failed`,
+      creditsLabel: "credits",
+      metaTurns: (count) => `${count} turns`,
+      metaSessions: (count) => `${count} sessions`,
+      metaTokens: (value) => `${value} tokens`,
+      metaCached: (pct) => `${pct} cached`,
+      metaSep: " \xB7 ",
+      statSessions: "Sessions",
+      statFailed: "Failed",
       localCost: "Local cost",
       tabToday: "Today",
       tabWeek: "Week",
@@ -1709,8 +1650,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       unknownModel: "Unknown model",
       updatedPrefix: "Updated",
       updatedUnknown: "Update time unknown",
-      lifetimeUnavailable: "Lifetime usage unavailable",
-      lifetime: (count, rate, tokens) => `${count} calls \xB7 ${rate} success \xB7 ${tokens} tokens`,
       noticePartial: (count) => `partial data unavailable (${count})`,
       noticeMissingPrefix: "missing data: ",
       missingPlan: "plan",
@@ -1753,7 +1692,9 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   var CALENDAR_CELLS = 42;
   var PLOT_PX = 96;
   var PLOT_INNER_PX = PLOT_PX - 1;
-  var SEG_MIN_PX = 2;
+  var SEG_MIN_PX = 4;
+  var TIP_GAP = 12;
+  var TIP_PAD = 8;
   var HEAT_MIN_MIX = 10;
   var HEAT_MAX_MIX = 60;
   var state = { range: "today", dataRange: null, data: null, loading: false, problem: null };
@@ -1772,6 +1713,19 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     return `${m >= 1 ? m.toFixed(1) : m.toFixed(2)}M`;
   };
   var pctText = (v2) => isNum(v2) ? `${v2.toFixed(1).replace(/\.0$/, "")}%` : "\u2014";
+  var plainInt = (v2) => isNum(v2) ? String(Math.round(v2)) : "\u2014";
+  var money4 = (v2) => isNum(v2) ? `$${v2.toFixed(4)}` : "\u2014";
+  var tokenKeys = ["input", "output", "reasoning", "cache_read", "cache_write"];
+  var tokenTotal = (row) => tokenKeys.reduce((sum, key) => sum + (num(row[key]) ?? 0), 0);
+  var cacheHitRate = (row) => {
+    const fresh = num(row.input) ?? 0, read = num(row.cache_read) ?? 0;
+    const denom = fresh + read;
+    return denom > 0 ? read / denom : null;
+  };
+  var cachePctText = (row) => {
+    const rate = cacheHitRate(row);
+    return rate === null ? t("emptyDash") : `${Math.round(rate * 100)}%`;
+  };
   var toneFor = (pct) => pct >= 90 ? "error" : pct >= 60 ? "warning" : void 0;
   var pctOf = (win) => {
     const pct = isObj(win) ? num(win.pct) : null;
@@ -1868,6 +1822,108 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     box.append(el2("span", "cg-stat-label", label), value);
     return { box, value };
   }
+  function buildCard(label) {
+    const box = el2("div", "cg-card");
+    const value = el2("div", "cg-card-value", "\u2014");
+    const sub = el2("div", "cg-card-sub");
+    sub.hidden = true;
+    box.append(el2("div", "cg-card-label", label), value, sub);
+    return { box, value, sub };
+  }
+  function refreshIcon() {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("fill", "currentColor");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M5.463 4.433A9.961 9.961 0 0 1 12 2c5.523 0 10 4.477 10 10 0 2.136-.67 4.116-1.81 5.74L17 12h3A8 8 0 0 0 6.46 6.228l-.997-1.795Zm13.074 15.134A9.961 9.961 0 0 1 12 22C6.477 22 2 17.523 2 12c0-2.136.67-4.116 1.81-5.74L7 12H4a8 8 0 0 0 13.54 5.772l.997 1.795Z");
+    svg.append(path);
+    return svg;
+  }
+  function buildRefreshButton(slot) {
+    const node = el2("button", "cg-iconbtn");
+    node.type = "button";
+    const icon2 = refreshIcon();
+    const ring2 = el2("span", "cg-iconbtn-ring");
+    ring2.hidden = true;
+    node.append(icon2, ring2);
+    const sync = (loading) => {
+      node.disabled = Boolean(loading);
+      node.setAttribute("aria-busy", loading ? "true" : "false");
+      ring2.hidden = !loading;
+      icon2.hidden = Boolean(loading);
+    };
+    const label = t("refresh");
+    node.setAttribute("aria-label", label);
+    node.title = label;
+    node.addEventListener("click", () => {
+      if (!node.disabled) void manualRefresh();
+    });
+    slot.append(node);
+    sync(false);
+    return { node, update: (next) => sync(next.loading) };
+  }
+  var tip = { box: null, head: null, model: null, stat: null, tokens: null };
+  var tipSegNode = null;
+  function ensureTip() {
+    if (tip.box) return tip.box;
+    const box = el2("div", "cg-tip");
+    const head = el2("div", "cg-tip-head");
+    const model = el2("div", "cg-tip-model");
+    const stat = el2("div", "cg-tip-line");
+    const tokens = el2("div", "cg-tip-line");
+    box.append(head, model, stat, tokens);
+    box.hidden = true;
+    document.body.append(box);
+    Object.assign(tip, { box, head, model, stat, tokens });
+    return box;
+  }
+  function tipLines(seg) {
+    const weekday = seg.date ? t("weekdays")[seg.date.getDay()] : "";
+    return [
+      weekday ? `${seg.day} ${weekday}` : String(seg.day ?? ""),
+      seg.label,
+      `${money4(seg.cost)} \xB7 ${t("metaTurns")(int(num(seg.turns)))} \xB7 ${t("metaSessions")(int(num(seg.sessions)))}`,
+      `${mtok(num(seg.input))} ${t("tokensIn")} / ${mtok(num(seg.output))} ${t("tokensOut")}`
+    ];
+  }
+  function positionTip(x, y) {
+    const box = tip.box;
+    const width = box.offsetWidth, height = box.offsetHeight;
+    const maxLeft = Math.max(TIP_PAD, window.innerWidth - width - TIP_PAD);
+    const maxTop = Math.max(TIP_PAD, window.innerHeight - height - TIP_PAD);
+    let left = x + TIP_GAP;
+    if (left > maxLeft) left = x - TIP_GAP - width;
+    let top = y + TIP_GAP;
+    if (top > maxTop) top = y - TIP_GAP - height;
+    box.style.left = `${Math.round(Math.min(Math.max(TIP_PAD, left), maxLeft))}px`;
+    box.style.top = `${Math.round(Math.min(Math.max(TIP_PAD, top), maxTop))}px`;
+  }
+  function showTip(node, x, y) {
+    const seg = node.cgSeg;
+    if (!seg) return;
+    const lines = tipLines(seg);
+    ensureTip();
+    tip.head.textContent = lines[0];
+    tip.model.textContent = lines[1];
+    tip.stat.textContent = lines[2];
+    tip.tokens.textContent = lines[3];
+    tip.box.hidden = false;
+    tipSegNode = node;
+    positionTip(x, y);
+  }
+  function hideTip() {
+    if (!tip.box || tip.box.hidden) return;
+    tip.box.hidden = true;
+    tipSegNode = null;
+  }
+  function segAt(target, stack) {
+    const node = target instanceof Element ? target.closest(".cg-seg") : null;
+    return node && node.cgSeg && stack.contains(node) ? node : null;
+  }
   function buildLegend() {
     const box = el2("div", "cg-legend");
     const items = [];
@@ -1889,6 +1945,30 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     for (let i = 0; i < COLUMN_COUNT; i++) {
       const col = el2("div", "cg-col");
       const stack = el2("div", "cg-stack");
+      stack.addEventListener("pointermove", (event) => {
+        if (event.pointerType === "touch") return;
+        const node = segAt(event.target, stack);
+        if (!node) {
+          hideTip();
+          return;
+        }
+        if (tipSegNode !== node) showTip(node, event.clientX, event.clientY);
+        else positionTip(event.clientX, event.clientY);
+      });
+      stack.addEventListener("pointerleave", (event) => {
+        if (event.pointerType !== "touch") hideTip();
+      });
+      stack.addEventListener("pointerdown", (event) => {
+        const node = segAt(event.target, stack);
+        if (!node) {
+          hideTip();
+          return;
+        }
+        if (event.pointerType === "touch") {
+          if (tipSegNode === node) hideTip();
+          else showTip(node, event.clientX, event.clientY);
+        }
+      });
       const value = el2("span", "cg-col-value");
       const day = el2("span", "cg-col-day");
       col.append(stack, value, day);
@@ -1928,13 +2008,14 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       const name = el2("span", "cg-model-name");
       const cost = el2("span", "cg-model-cost");
       top.append(name, cost);
+      const meta = el2("div", "cg-model-meta");
       const track = el2("div", "cg-model-track");
       const fill = el2("div", "cg-model-fill");
       track.append(fill);
-      row.append(top, track);
+      row.append(top, meta, track);
       row.hidden = true;
       box.append(row);
-      rows.push({ row, name, cost, fill });
+      rows.push({ row, name, cost, meta, fill });
     }
     return { box, rows };
   }
@@ -1950,13 +2031,20 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     content.hidden = true;
     const planName = el2("span", "cg-plan", "\u2014"), badgeSlot = el2("span");
     const periodLine = el2("div", "cg-period", "\u2014");
+    const refreshSlot = el2("span", "cg-refresh");
     const headTop = el2("div", "cg-head-top");
-    headTop.append(planName, badgeSlot, el2("span", "cg-spacer"));
+    headTop.append(planName, badgeSlot, el2("span", "cg-spacer"), refreshSlot);
     const head = el2("header", "cg-head");
     head.append(headTop, periodLine);
     const bannerSlot = el2("div");
     bannerSlot.hidden = true;
     const banner = mountBanner(bannerSlot, { tone: "warning", title: "" });
+    const cards = el2("div", "cg-cards");
+    const cardRequests = buildCard(t("cardRequests"));
+    const cardSuccess = buildCard(t("cardSuccess"));
+    const cardCost = buildCard(t("cardCost"));
+    const cardTokens = buildCard(t("cardTokens"));
+    cards.append(cardRequests.box, cardSuccess.box, cardCost.box, cardTokens.box);
     const bars = el2("div", "cg-bars");
     const fiveHour = buildBar(t("barFiveHour"));
     const weekly = buildBar(t("barWeekly"));
@@ -2007,21 +2095,15 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       modelSepSlot,
       models.box
     );
-    const updatedLine = el2("span", "cg-foot-note", "\u2014"), refreshSlot = el2("span");
+    const updatedLine = el2("span", "cg-foot-note", "\u2014");
     const footRow = el2("div", "cg-foot-row");
-    footRow.append(updatedLine, refreshSlot);
-    const lifetimeSlot = el2("div", "cg-lifetime"), lifetime = mountText(lifetimeSlot, { text: "" });
+    footRow.append(updatedLine);
     const foot = el2("footer", "cg-foot");
-    foot.append(footRow, lifetimeSlot);
+    foot.append(footRow);
     const badge = mountBadge(badgeSlot, { label: "" });
     badgeSlot.hidden = true;
-    const refreshButton = mountButton(refreshSlot, {
-      label: t("refresh"),
-      variant: "outline",
-      size: "xs",
-      onClick: () => void manualRefresh()
-    });
-    content.append(head, bannerSlot, bars, localSection, foot);
+    const refreshButton = buildRefreshButton(refreshSlot);
+    content.append(head, cards, bannerSlot, bars, localSection, foot);
     root.append(spinnerWrap, emptyWrap, content);
     ui = {
       spinnerWrap,
@@ -2034,6 +2116,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       periodLine,
       bannerSlot,
       banner,
+      cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
       fiveHour,
       weekly,
       monthly,
@@ -2051,8 +2134,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       modelSepSlot,
       models,
       updatedLine,
-      refreshButton,
-      lifetime
+      refreshButton
     };
   }
   function updateLegend(chart, models) {
@@ -2069,21 +2151,29 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   function paintStack(cell, segs, heights) {
     while (cell.segs.length < segs.length) {
       const node = el2("div", "cg-seg");
+      node.setAttribute("role", "img");
       cell.stack.append(node);
       cell.segs.push(node);
     }
+    const topIndex = heights.reduce((acc, height, i) => height > 0 ? i : acc, -1);
     cell.segs.forEach((node, i) => {
       const seg = segs[i];
       if (!seg) {
         node.hidden = true;
+        node.cgSeg = null;
+        node.removeAttribute("aria-label");
         return;
       }
       node.hidden = false;
+      node.cgSeg = seg;
+      node.classList.toggle("is-top", i === topIndex);
       node.style.setProperty("--cg-color", MODEL_COLORS[seg.slot] ?? MODEL_COLORS[OTHER_SLOT]);
       node.style.height = `${heights[i]}px`;
+      node.setAttribute("aria-label", tipLines(node.cgSeg).join(" \xB7 "));
     });
   }
   function updateColumns(chart, local, models, rank, byDay) {
+    hideTip();
     const lookup = /* @__PURE__ */ new Map();
     const fallback = [];
     for (const row of byDay) {
@@ -2100,14 +2190,60 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
           const cost = Math.max(0, costOf(item));
           if (cost <= 0) continue;
           const slot = slotFor(rank, item.model);
-          groups.set(slot, (groups.get(slot) ?? 0) + cost);
+          const agg = groups.get(slot) ?? {
+            count: 0,
+            cost: 0,
+            turns: 0,
+            input: 0,
+            output: 0,
+            reasoning: 0,
+            cache_read: 0,
+            cache_write: 0,
+            sessions: 0,
+            model: null
+          };
+          agg.count += 1;
+          agg.cost += cost;
+          agg.turns += num(item.turns) ?? 0;
+          agg.input += num(item.input) ?? 0;
+          agg.output += num(item.output) ?? 0;
+          agg.reasoning += num(item.reasoning) ?? 0;
+          agg.cache_read += num(item.cache_read) ?? 0;
+          agg.cache_write += num(item.cache_write) ?? 0;
+          agg.sessions += num(item.sessions) ?? 0;
+          agg.model = typeof item.model === "string" && item.model ? item.model : agg.model;
+          groups.set(slot, agg);
         }
       }
       const declared = row ? num(row.cost) : null;
-      const total = Math.max(0, declared ?? [...groups.values()].reduce((a, b) => a + b, 0));
-      if (groups.size === 0 && total > 0) groups.set(OTHER_SLOT, total);
-      const segs = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([slot, cost]) => ({ slot, cost }));
-      return { key, date: localDate(key), total, segs };
+      const total = Math.max(0, declared ?? [...groups.values()].reduce((acc, agg) => acc + agg.cost, 0));
+      if (groups.size === 0 && total > 0) {
+        groups.set(OTHER_SLOT, {
+          count: 0,
+          cost: total,
+          turns: 0,
+          input: 0,
+          output: 0,
+          reasoning: 0,
+          cache_read: 0,
+          cache_write: 0,
+          sessions: 0,
+          model: null
+        });
+      }
+      const date = localDate(key);
+      const segs = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([slot, agg]) => ({
+        slot,
+        cost: agg.cost,
+        day: key,
+        date,
+        label: agg.count > 1 ? t("other") : agg.model ? shortModel(agg.model) : t("unknownModel"),
+        turns: agg.count > 0 ? agg.turns : null,
+        sessions: agg.count === 1 ? num(agg.sessions) : null,
+        input: agg.input,
+        output: agg.output
+      }));
+      return { key, date, total, segs, hasActivity: Boolean(row) };
     });
     const max = prepared.reduce((acc, day) => Math.max(acc, day.total), 0);
     const weekdays = t("weekdays");
@@ -2120,8 +2256,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       cell.col.hidden = false;
       const budget = max > 0 ? Math.round(day.total / max * PLOT_INNER_PX) : 0;
       paintStack(cell, day.segs, fitHeights(day.segs.map((seg) => seg.cost), budget));
-      cell.value.textContent = day.total > 0 ? money(day.total) : t("emptyDash");
-      cell.value.classList.toggle("is-zero", day.total <= 0);
+      cell.value.textContent = day.hasActivity ? money(day.total) : t("emptyDash");
+      cell.value.classList.toggle("is-zero", day.hasActivity && day.total <= 0);
       cell.day.textContent = day.date ? weekdays[day.date.getDay()] ?? shortDay(day.key) : shortDay(day.key);
     });
     updateLegend(chart, models);
@@ -2166,6 +2302,12 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       }
     });
   }
+  var metaText = (row) => [
+    t("metaTurns")(int(num(row.turns))),
+    t("metaSessions")(int(num(row.sessions))),
+    t("metaTokens")(mtok(tokenTotal(row))),
+    t("metaCached")(cachePctText(row))
+  ].join(t("metaSep"));
   function updateModels(chart, models) {
     const top = models.slice(0, BAR_ROWS);
     const rest = models.slice(BAR_ROWS);
@@ -2173,10 +2315,17 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const rows = top.map((row, i) => ({
       name: shortModel(row.model),
       cost: costOf(row),
-      slot: i < TOP_MODELS ? i : OTHER_SLOT
+      slot: i < TOP_MODELS ? i : OTHER_SLOT,
+      meta: metaText(row)
     }));
     if (rest.length > 0) {
-      rows.push({ name: t("other"), cost: rest.reduce((acc, row) => acc + costOf(row), 0), slot: OTHER_SLOT });
+      const tail = { turns: 0, cost: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, sessions: null };
+      for (const row of rest) {
+        tail.turns += num(row.turns) ?? 0;
+        tail.cost += costOf(row);
+        for (const key of tokenKeys) tail[key] += num(row[key]) ?? 0;
+      }
+      rows.push({ name: t("other"), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
     }
     chart.rows.forEach((cell, i) => {
       const row = rows[i];
@@ -2188,6 +2337,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       cell.row.style.setProperty("--cg-color", MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
       cell.name.textContent = row.name;
       cell.cost.textContent = money(row.cost);
+      cell.meta.textContent = row.meta;
       cell.fill.style.width = max > 0 ? `${(Math.min(1, row.cost / max) * 100).toFixed(1)}%` : "0%";
     });
   }
@@ -2243,18 +2393,51 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     fillWindowBar(ui.weekly, t("barWeekly"), windows && isObj(windows.weekly) ? windows.weekly : null);
     fillMonthlyBar(d);
   }
+  function renderCards(d) {
+    const usage = isObj(d.periodUsage) ? d.periodUsage : null;
+    const cards = ui.cards;
+    const all = [cards.requests, cards.success, cards.cost, cards.tokens];
+    if (!usage) {
+      for (const card of all) {
+        card.value.textContent = t("emptyDash");
+        card.sub.textContent = "";
+        card.sub.hidden = true;
+      }
+      return;
+    }
+    cards.requests.value.textContent = plainInt(num(usage.totalCount));
+    cards.requests.sub.textContent = t("cardFailed")(plainInt(num(usage.failedCount)));
+    cards.requests.sub.hidden = false;
+    const rate = num(usage.successRate);
+    cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t("emptyDash");
+    cards.success.sub.hidden = true;
+    cards.cost.value.textContent = money4(num(usage.totalCost));
+    cards.cost.sub.textContent = `${money(num(usage.totalCredits))} ${t("creditsLabel")}`;
+    cards.cost.sub.hidden = false;
+    cards.tokens.value.textContent = mtok(num(usage.tokens));
+    cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t("tokensIn")} / ${mtok(num(usage.tokensOut))} ${t("tokensOut")}`;
+    cards.tokens.sub.hidden = false;
+  }
   function renderLocal(d) {
+    hideTip();
     const local = isObj(d.local) ? d.local : null;
     const totals = local && isObj(local.totals) ? local.totals : null;
     const from = local && typeof local.from === "string" ? local.from : null;
     const to = local && typeof local.to === "string" ? local.to : null;
     ui.localRange.textContent = from && to ? from === to ? shortDay(from) : `${shortDay(from)} ~ ${shortDay(to)}` : "";
     if (totals) {
-      const [input, output, reasoning, cacheRead] = ["input", "output", "reasoning", "cache_read"].map((k) => num(totals[k]) ?? 0);
+      const counters = tokenKeys.map((key) => num(totals[key]) ?? 0);
       ui.statTurns.value.textContent = int(num(totals.turns));
-      ui.statTokens.value.textContent = mtok(input + output + reasoning + cacheRead);
+      ui.statTokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
       ui.statCost.value.textContent = money(num(totals.cost));
-      ui.statsNote.textContent = `${t("tokensIn")} ${mtok(input)} \xB7 ${t("tokensOut")} ${mtok(output)} \xB7 ${t("tokensReasoning")} ${mtok(reasoning)} \xB7 ${t("tokensCache")} ${mtok(cacheRead)}`;
+      ui.statsNote.textContent = [
+        `${t("tokensIn")} ${mtok(counters[0])}`,
+        `${t("tokensOut")} ${mtok(counters[1])}`,
+        `${t("tokensReasoning")} ${mtok(counters[2])}`,
+        `${t("tokensCache")} ${mtok(counters[3] + counters[4])}`,
+        `${t("statSessions")} ${int(num(totals.sessions))}`,
+        `${t("statFailed")} ${int(num(totals.failed))}`
+      ].join(t("metaSep"));
     } else {
       const dash = t("emptyDash");
       ui.statTurns.value.textContent = dash;
@@ -2269,7 +2452,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const view = state.dataRange ?? state.range;
     ui.localNote.hidden = hasData;
     ui.localNote.textContent = local ? t("noActivity") : t("recordUnavailable");
-    const showDay = hasData && view !== "all" && byDay.length > 0;
+    const showDay = hasData && (view === "week" || view === "month") && byDay.length > 0;
     ui.daySepSlot.hidden = !showDay;
     ui.dayChartSlot.hidden = !showDay;
     ui.modelSepSlot.hidden = !hasData;
@@ -2284,17 +2467,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     if (hasData) updateModels(ui.models, models);
   }
   function renderFooter(d) {
-    const usage = isObj(d.periodUsage) ? d.periodUsage : null;
     ui.updatedLine.textContent = d.generatedAt ? `${t("updatedPrefix")} ${timeText(d.generatedAt)}` : t("updatedUnknown");
-    if (!usage) {
-      ui.lifetime.update({ text: t("lifetimeUnavailable") });
-      return;
-    }
-    const rate = num(usage.successRate);
-    const tokens = num(usage.tokens) ?? (num(usage.tokensIn) ?? 0) + (num(usage.tokensOut) ?? 0);
-    ui.lifetime.update({
-      text: t("lifetime")(int(num(usage.totalCount)), isNum(rate) ? `${rate.toFixed(2)}%` : "\u2014", mtok(tokens))
-    });
   }
   function renderNotice(d) {
     const errors = d && Array.isArray(d.errors) ? d.errors.filter(isObj) : [];
@@ -2341,6 +2514,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     ui.refreshButton.update({ loading: state.loading });
     if (d) {
       renderHeader(d);
+      renderCards(d);
       renderBars(d);
       renderLocal(d);
       renderFooter(d);
@@ -2442,4 +2616,9 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   window.setInterval(() => {
     if (state.data) renderBars(state.data);
   }, 3e4);
+  document.addEventListener("pointerdown", (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target || !target.closest(".cg-seg")) hideTip();
+  }, true);
+  window.addEventListener("scroll", hideTip, { capture: true, passive: true });
 })();

@@ -1,7 +1,7 @@
 import { connectHost } from '@openchamber/sdk';
 import {
   applyHostReady, mountBadge, mountBanner, mountButton, mountEmpty,
-  mountProgress, mountSeparator, mountSpinner, mountTabs, mountText,
+  mountProgress, mountSeparator, mountSpinner, mountTabs,
 } from '@openchamber/sdk/ui';
 
 const host = connectHost();
@@ -28,6 +28,19 @@ const MESSAGES = {
     resetInHours: (hour) => `${hour} 小时后重置`,
     resetInMinutes: (minute) => `${minute} 分钟后重置`,
     periodEnds: '周期至',
+    cardRequests: '请求',
+    cardSuccess: '成功率',
+    cardCost: '花费',
+    cardTokens: 'Token',
+    cardFailed: (count) => `失败 ${count}`,
+    creditsLabel: 'credits',
+    metaTurns: (count) => `${count} 轮`,
+    metaSessions: (count) => `${count} 对话`,
+    metaTokens: (value) => `${value} tokens`,
+    metaCached: (pct) => `缓存 ${pct}`,
+    metaSep: ' · ',
+    statSessions: '对话',
+    statFailed: '失败',
     localCost: '本地成本',
     tabToday: '今日',
     tabWeek: '本周',
@@ -52,8 +65,6 @@ const MESSAGES = {
     unknownModel: '未知模型',
     updatedPrefix: '更新于',
     updatedUnknown: '更新时间未知',
-    lifetimeUnavailable: '累计用量不可用',
-    lifetime: (count, rate, tokens) => `累计 ${count} 次 · 成功率 ${rate} · ${tokens} tokens`,
     noticePartial: (count) => `部分数据不可用（${count}）`,
     noticeMissingPrefix: '部分数据缺失：',
     missingPlan: '订阅',
@@ -89,6 +100,19 @@ const MESSAGES = {
     resetInHours: (hour) => `resets in ${hour}h`,
     resetInMinutes: (minute) => `resets in ${minute}m`,
     periodEnds: 'period ends',
+    cardRequests: 'Requests',
+    cardSuccess: 'Success',
+    cardCost: 'Cost',
+    cardTokens: 'Tokens',
+    cardFailed: (count) => `${count} failed`,
+    creditsLabel: 'credits',
+    metaTurns: (count) => `${count} turns`,
+    metaSessions: (count) => `${count} sessions`,
+    metaTokens: (value) => `${value} tokens`,
+    metaCached: (pct) => `${pct} cached`,
+    metaSep: ' · ',
+    statSessions: 'Sessions',
+    statFailed: 'Failed',
     localCost: 'Local cost',
     tabToday: 'Today',
     tabWeek: 'Week',
@@ -113,8 +137,6 @@ const MESSAGES = {
     unknownModel: 'Unknown model',
     updatedPrefix: 'Updated',
     updatedUnknown: 'Update time unknown',
-    lifetimeUnavailable: 'Lifetime usage unavailable',
-    lifetime: (count, rate, tokens) => `${count} calls · ${rate} success · ${tokens} tokens`,
     noticePartial: (count) => `partial data unavailable (${count})`,
     noticeMissingPrefix: 'missing data: ',
     missingPlan: 'plan',
@@ -160,7 +182,9 @@ const COLUMN_COUNT = 7;
 const CALENDAR_CELLS = 42;
 const PLOT_PX = 96;
 const PLOT_INNER_PX = PLOT_PX - 1;
-const SEG_MIN_PX = 2;
+const SEG_MIN_PX = 4;
+const TIP_GAP = 12;
+const TIP_PAD = 8;
 const HEAT_MIN_MIX = 10;
 const HEAT_MAX_MIX = 60;
 
@@ -181,6 +205,21 @@ const mtok = (v) => {
   return `${m >= 1 ? m.toFixed(1) : m.toFixed(2)}M`;
 };
 const pctText = (v) => (isNum(v) ? `${v.toFixed(1).replace(/\.0$/, '')}%` : '—');
+/* billing-period formatters — plain integers and exact money, per the reference look */
+const plainInt = (v) => (isNum(v) ? String(Math.round(v)) : '—');
+const money4 = (v) => (isNum(v) ? `$${v.toFixed(4)}` : '—');
+/* local-cost counters — v3 rows carry input/output/reasoning/cache_read/cache_write */
+const tokenKeys = ['input', 'output', 'reasoning', 'cache_read', 'cache_write'];
+const tokenTotal = (row) => tokenKeys.reduce((sum, key) => sum + (num(row[key]) ?? 0), 0);
+const cacheHitRate = (row) => {
+  const fresh = num(row.input) ?? 0, read = num(row.cache_read) ?? 0;
+  const denom = fresh + read;
+  return denom > 0 ? read / denom : null;
+};
+const cachePctText = (row) => {
+  const rate = cacheHitRate(row);
+  return rate === null ? t('emptyDash') : `${Math.round(rate * 100)}%`;
+};
 const toneFor = (pct) => (pct >= 90 ? 'error' : pct >= 60 ? 'warning' : undefined);
 const pctOf = (win) => {
   const pct = isObj(win) ? num(win.pct) : null;
@@ -253,7 +292,8 @@ const windowDays = (from, to, fallback) => {
   }
   return days.length > 0 ? days : fallback;
 };
-/** Split a fixed pixel budget between segments, keeping every non-zero part visible. */
+/** Split a fixed pixel budget between segments, keeping every non-zero part visible.
+ *  `SEG_MIN_PX` is the slimmest bar that still reads and hovers under a 16px-wide column. */
 const fitHeights = (values, total) => {
   const used = values.filter((v) => v > 0).length;
   const sum = values.reduce((a, b) => a + b, 0);
@@ -275,6 +315,119 @@ function buildStat(label) {
   const box = el('div', 'cg-stat'), value = el('span', 'cg-stat-value', '—');
   box.append(el('span', 'cg-stat-label', label), value);
   return { box, value };
+}
+
+function buildCard(label) {
+  const box = el('div', 'cg-card');
+  const value = el('div', 'cg-card-value', '—');
+  const sub = el('div', 'cg-card-sub');
+  sub.hidden = true;
+  box.append(el('div', 'cg-card-label', label), value, sub);
+  return { box, value, sub };
+}
+
+function refreshIcon() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('width', '14');
+  svg.setAttribute('height', '14');
+  svg.setAttribute('fill', 'currentColor');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M5.463 4.433A9.961 9.961 0 0 1 12 2c5.523 0 10 4.477 10 10 0 2.136-.67 4.116-1.81 5.74L17 12h3A8 8 0 0 0 6.46 6.228l-.997-1.795Zm13.074 15.134A9.961 9.961 0 0 1 12 22C6.477 22 2 17.523 2 12c0-2.136.67-4.116 1.81-5.74L7 12H4a8 8 0 0 0 13.54 5.772l.997 1.795Z');
+  svg.append(path);
+  return svg;
+}
+
+function buildRefreshButton(slot) {
+  const node = el('button', 'cg-iconbtn');
+  node.type = 'button';
+  const icon = refreshIcon();
+  const ring = el('span', 'cg-iconbtn-ring');
+  ring.hidden = true;
+  node.append(icon, ring);
+  const sync = (loading) => {
+    node.disabled = Boolean(loading);
+    node.setAttribute('aria-busy', loading ? 'true' : 'false');
+    ring.hidden = !loading;
+    icon.hidden = Boolean(loading);
+  };
+  const label = t('refresh');
+  node.setAttribute('aria-label', label);
+  node.title = label;
+  node.addEventListener('click', () => {
+    if (!node.disabled) void manualRefresh();
+  });
+  slot.append(node);
+  sync(false);
+  return { node, update: (next) => sync(next.loading) };
+}
+
+/* week-chart tooltip — a custom node so it carries tokens/sessions, not just a title */
+const tip = { box: null, head: null, model: null, stat: null, tokens: null };
+let tipSegNode = null;
+
+function ensureTip() {
+  if (tip.box) return tip.box;
+  const box = el('div', 'cg-tip');
+  const head = el('div', 'cg-tip-head');
+  const model = el('div', 'cg-tip-model');
+  const stat = el('div', 'cg-tip-line');
+  const tokens = el('div', 'cg-tip-line');
+  box.append(head, model, stat, tokens);
+  box.hidden = true;
+  document.body.append(box);
+  Object.assign(tip, { box, head, model, stat, tokens });
+  return box;
+}
+
+function tipLines(seg) {
+  const weekday = seg.date ? t('weekdays')[seg.date.getDay()] : '';
+  return [
+    weekday ? `${seg.day} ${weekday}` : String(seg.day ?? ''),
+    seg.label,
+    `${money4(seg.cost)} · ${t('metaTurns')(int(num(seg.turns)))} · ${t('metaSessions')(int(num(seg.sessions)))}`,
+    `${mtok(num(seg.input))} ${t('tokensIn')} / ${mtok(num(seg.output))} ${t('tokensOut')}`,
+  ];
+}
+
+function positionTip(x, y) {
+  const box = tip.box;
+  const width = box.offsetWidth, height = box.offsetHeight;
+  const maxLeft = Math.max(TIP_PAD, window.innerWidth - width - TIP_PAD);
+  const maxTop = Math.max(TIP_PAD, window.innerHeight - height - TIP_PAD);
+  let left = x + TIP_GAP;
+  if (left > maxLeft) left = x - TIP_GAP - width;
+  let top = y + TIP_GAP;
+  if (top > maxTop) top = y - TIP_GAP - height;
+  box.style.left = `${Math.round(Math.min(Math.max(TIP_PAD, left), maxLeft))}px`;
+  box.style.top = `${Math.round(Math.min(Math.max(TIP_PAD, top), maxTop))}px`;
+}
+
+function showTip(node, x, y) {
+  const seg = node.cgSeg;
+  if (!seg) return;
+  const lines = tipLines(seg);
+  ensureTip();
+  tip.head.textContent = lines[0];
+  tip.model.textContent = lines[1];
+  tip.stat.textContent = lines[2];
+  tip.tokens.textContent = lines[3];
+  tip.box.hidden = false;
+  tipSegNode = node;
+  positionTip(x, y);
+}
+
+function hideTip() {
+  if (!tip.box || tip.box.hidden) return;
+  tip.box.hidden = true;
+  tipSegNode = null;
+}
+
+function segAt(target, stack) {
+  const node = target instanceof Element ? target.closest('.cg-seg') : null;
+  return node && node.cgSeg && stack.contains(node) ? node : null;
 }
 
 function buildLegend() {
@@ -299,6 +452,30 @@ function buildColumns() {
   for (let i = 0; i < COLUMN_COUNT; i++) {
     const col = el('div', 'cg-col');
     const stack = el('div', 'cg-stack');
+    stack.addEventListener('pointermove', (event) => {
+      if (event.pointerType === 'touch') return;
+      const node = segAt(event.target, stack);
+      if (!node) {
+        hideTip();
+        return;
+      }
+      if (tipSegNode !== node) showTip(node, event.clientX, event.clientY);
+      else positionTip(event.clientX, event.clientY);
+    });
+    stack.addEventListener('pointerleave', (event) => {
+      if (event.pointerType !== 'touch') hideTip();
+    });
+    stack.addEventListener('pointerdown', (event) => {
+      const node = segAt(event.target, stack);
+      if (!node) {
+        hideTip();
+        return;
+      }
+      if (event.pointerType === 'touch') {
+        if (tipSegNode === node) hideTip();
+        else showTip(node, event.clientX, event.clientY);
+      }
+    });
     const value = el('span', 'cg-col-value');
     const day = el('span', 'cg-col-day');
     col.append(stack, value, day);
@@ -340,13 +517,14 @@ function buildModels() {
     const name = el('span', 'cg-model-name');
     const cost = el('span', 'cg-model-cost');
     top.append(name, cost);
+    const meta = el('div', 'cg-model-meta');
     const track = el('div', 'cg-model-track');
     const fill = el('div', 'cg-model-fill');
     track.append(fill);
-    row.append(top, track);
+    row.append(top, meta, track);
     row.hidden = true;
     box.append(row);
-    rows.push({ row, name, cost, fill });
+    rows.push({ row, name, cost, meta, fill });
   }
   return { box, rows };
 }
@@ -364,14 +542,22 @@ function buildUi() {
 
   const planName = el('span', 'cg-plan', '—'), badgeSlot = el('span');
   const periodLine = el('div', 'cg-period', '—');
+  const refreshSlot = el('span', 'cg-refresh');
   const headTop = el('div', 'cg-head-top');
-  headTop.append(planName, badgeSlot, el('span', 'cg-spacer'));
+  headTop.append(planName, badgeSlot, el('span', 'cg-spacer'), refreshSlot);
   const head = el('header', 'cg-head');
   head.append(headTop, periodLine);
 
   const bannerSlot = el('div');
   bannerSlot.hidden = true;
   const banner = mountBanner(bannerSlot, { tone: 'warning', title: '' });
+
+  const cards = el('div', 'cg-cards');
+  const cardRequests = buildCard(t('cardRequests'));
+  const cardSuccess = buildCard(t('cardSuccess'));
+  const cardCost = buildCard(t('cardCost'));
+  const cardTokens = buildCard(t('cardTokens'));
+  cards.append(cardRequests.box, cardSuccess.box, cardCost.box, cardTokens.box);
 
   const bars = el('div', 'cg-bars');
   const fiveHour = buildBar(t('barFiveHour'));
@@ -420,26 +606,24 @@ function buildUi() {
     daySepSlot, dayChartSlot, modelSepSlot, models.box,
   );
 
-  const updatedLine = el('span', 'cg-foot-note', '—'), refreshSlot = el('span');
+  const updatedLine = el('span', 'cg-foot-note', '—');
   const footRow = el('div', 'cg-foot-row');
-  footRow.append(updatedLine, refreshSlot);
-  const lifetimeSlot = el('div', 'cg-lifetime'), lifetime = mountText(lifetimeSlot, { text: '' });
+  footRow.append(updatedLine);
   const foot = el('footer', 'cg-foot');
-  foot.append(footRow, lifetimeSlot);
+  foot.append(footRow);
 
   const badge = mountBadge(badgeSlot, { label: '' });
   badgeSlot.hidden = true;
-  const refreshButton = mountButton(refreshSlot, {
-    label: t('refresh'), variant: 'outline', size: 'xs', onClick: () => void manualRefresh(),
-  });
+  const refreshButton = buildRefreshButton(refreshSlot);
 
-  content.append(head, bannerSlot, bars, localSection, foot);
+  content.append(head, cards, bannerSlot, bars, localSection, foot);
   root.append(spinnerWrap, emptyWrap, content);
   ui = {
     spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine, bannerSlot,
-    banner, fiveHour, weekly, monthly, tabs, localRange, statTurns, statTokens, statCost,
+    banner, cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
+    fiveHour, weekly, monthly, tabs, localRange, statTurns, statTokens, statCost,
     statsNote, localNote, daySepSlot, dayChartSlot, columns, calendar, modelSepSlot, models,
-    updatedLine, refreshButton, lifetime,
+    updatedLine, refreshButton,
   };
 }
 
@@ -459,22 +643,30 @@ function updateLegend(chart, models) {
 function paintStack(cell, segs, heights) {
   while (cell.segs.length < segs.length) {
     const node = el('div', 'cg-seg');
+    node.setAttribute('role', 'img');
     cell.stack.append(node);
     cell.segs.push(node);
   }
+  const topIndex = heights.reduce((acc, height, i) => (height > 0 ? i : acc), -1);
   cell.segs.forEach((node, i) => {
     const seg = segs[i];
     if (!seg) {
       node.hidden = true;
+      node.cgSeg = null;
+      node.removeAttribute('aria-label');
       return;
     }
     node.hidden = false;
+    node.cgSeg = seg;
+    node.classList.toggle('is-top', i === topIndex);
     node.style.setProperty('--cg-color', MODEL_COLORS[seg.slot] ?? MODEL_COLORS[OTHER_SLOT]);
     node.style.height = `${heights[i]}px`;
+    node.setAttribute('aria-label', tipLines(node.cgSeg).join(' · '));
   });
 }
 
 function updateColumns(chart, local, models, rank, byDay) {
+  hideTip();
   const lookup = new Map();
   const fallback = [];
   for (const row of byDay) {
@@ -491,14 +683,40 @@ function updateColumns(chart, local, models, rank, byDay) {
         const cost = Math.max(0, costOf(item));
         if (cost <= 0) continue;
         const slot = slotFor(rank, item.model);
-        groups.set(slot, (groups.get(slot) ?? 0) + cost);
+        const agg = groups.get(slot) ?? {
+          count: 0, cost: 0, turns: 0, input: 0, output: 0, reasoning: 0,
+          cache_read: 0, cache_write: 0, sessions: 0, model: null,
+        };
+        agg.count += 1;
+        agg.cost += cost;
+        agg.turns += num(item.turns) ?? 0;
+        agg.input += num(item.input) ?? 0;
+        agg.output += num(item.output) ?? 0;
+        agg.reasoning += num(item.reasoning) ?? 0;
+        agg.cache_read += num(item.cache_read) ?? 0;
+        agg.cache_write += num(item.cache_write) ?? 0;
+        agg.sessions += num(item.sessions) ?? 0;
+        agg.model = typeof item.model === 'string' && item.model ? item.model : agg.model;
+        groups.set(slot, agg);
       }
     }
     const declared = row ? num(row.cost) : null;
-    const total = Math.max(0, declared ?? [...groups.values()].reduce((a, b) => a + b, 0));
-    if (groups.size === 0 && total > 0) groups.set(OTHER_SLOT, total);
-    const segs = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([slot, cost]) => ({ slot, cost }));
-    return { key, date: localDate(key), total, segs };
+    const total = Math.max(0, declared ?? [...groups.values()].reduce((acc, agg) => acc + agg.cost, 0));
+    if (groups.size === 0 && total > 0) {
+      groups.set(OTHER_SLOT, {
+        count: 0, cost: total, turns: 0, input: 0, output: 0, reasoning: 0,
+        cache_read: 0, cache_write: 0, sessions: 0, model: null,
+      });
+    }
+    const date = localDate(key);
+    const segs = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([slot, agg]) => ({
+      slot, cost: agg.cost, day: key, date,
+      label: agg.count > 1 ? t('other') : agg.model ? shortModel(agg.model) : t('unknownModel'),
+      turns: agg.count > 0 ? agg.turns : null,
+      sessions: agg.count === 1 ? num(agg.sessions) : null,
+      input: agg.input, output: agg.output,
+    }));
+    return { key, date, total, segs, hasActivity: Boolean(row) };
   });
   const max = prepared.reduce((acc, day) => Math.max(acc, day.total), 0);
   const weekdays = t('weekdays');
@@ -511,8 +729,10 @@ function updateColumns(chart, local, models, rank, byDay) {
     cell.col.hidden = false;
     const budget = max > 0 ? Math.round((day.total / max) * PLOT_INNER_PX) : 0;
     paintStack(cell, day.segs, fitHeights(day.segs.map((seg) => seg.cost), budget));
-    cell.value.textContent = day.total > 0 ? money(day.total) : t('emptyDash');
-    cell.value.classList.toggle('is-zero', day.total <= 0);
+    /* hasActivity, not total > 0: unpriced models record cost 0 and are never backfilled, so a day
+     * can hold real work with a zero bill — that is "$0.00", not the no-data dash. */
+    cell.value.textContent = day.hasActivity ? money(day.total) : t('emptyDash');
+    cell.value.classList.toggle('is-zero', day.hasActivity && day.total <= 0);
     cell.day.textContent = day.date ? weekdays[day.date.getDay()] ?? shortDay(day.key) : shortDay(day.key);
   });
   updateLegend(chart, models);
@@ -557,15 +777,28 @@ function updateCalendar(chart, local, byDay) {
   });
 }
 
+const metaText = (row) => [
+  t('metaTurns')(int(num(row.turns))),
+  t('metaSessions')(int(num(row.sessions))),
+  t('metaTokens')(mtok(tokenTotal(row))),
+  t('metaCached')(cachePctText(row)),
+].join(t('metaSep'));
+
 function updateModels(chart, models) {
   const top = models.slice(0, BAR_ROWS);
   const rest = models.slice(BAR_ROWS);
   const max = top.length > 0 ? costOf(top[0]) : 0;
   const rows = top.map((row, i) => ({
-    name: shortModel(row.model), cost: costOf(row), slot: i < TOP_MODELS ? i : OTHER_SLOT,
+    name: shortModel(row.model), cost: costOf(row), slot: i < TOP_MODELS ? i : OTHER_SLOT, meta: metaText(row),
   }));
   if (rest.length > 0) {
-    rows.push({ name: t('other'), cost: rest.reduce((acc, row) => acc + costOf(row), 0), slot: OTHER_SLOT });
+    const tail = { turns: 0, cost: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, sessions: null };
+    for (const row of rest) {
+      tail.turns += num(row.turns) ?? 0;
+      tail.cost += costOf(row);
+      for (const key of tokenKeys) tail[key] += num(row[key]) ?? 0;
+    }
+    rows.push({ name: t('other'), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
   }
   chart.rows.forEach((cell, i) => {
     const row = rows[i];
@@ -577,6 +810,7 @@ function updateModels(chart, models) {
     cell.row.style.setProperty('--cg-color', MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
     cell.name.textContent = row.name;
     cell.cost.textContent = money(row.cost);
+    cell.meta.textContent = row.meta;
     cell.fill.style.width = max > 0 ? `${(Math.min(1, row.cost / max) * 100).toFixed(1)}%` : '0%';
   });
 }
@@ -638,7 +872,34 @@ function renderBars(d) {
   fillMonthlyBar(d);
 }
 
+function renderCards(d) {
+  const usage = isObj(d.periodUsage) ? d.periodUsage : null;
+  const cards = ui.cards;
+  const all = [cards.requests, cards.success, cards.cost, cards.tokens];
+  if (!usage) {
+    for (const card of all) {
+      card.value.textContent = t('emptyDash');
+      card.sub.textContent = '';
+      card.sub.hidden = true;
+    }
+    return;
+  }
+  cards.requests.value.textContent = plainInt(num(usage.totalCount));
+  cards.requests.sub.textContent = t('cardFailed')(plainInt(num(usage.failedCount)));
+  cards.requests.sub.hidden = false;
+  const rate = num(usage.successRate);
+  cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t('emptyDash');
+  cards.success.sub.hidden = true;
+  cards.cost.value.textContent = money4(num(usage.totalCost));
+  cards.cost.sub.textContent = `${money(num(usage.totalCredits))} ${t('creditsLabel')}`;
+  cards.cost.sub.hidden = false;
+  cards.tokens.value.textContent = mtok(num(usage.tokens));
+  cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t('tokensIn')} / ${mtok(num(usage.tokensOut))} ${t('tokensOut')}`;
+  cards.tokens.sub.hidden = false;
+}
+
 function renderLocal(d) {
+  hideTip();
   const local = isObj(d.local) ? d.local : null;
   const totals = local && isObj(local.totals) ? local.totals : null;
   const from = local && typeof local.from === 'string' ? local.from : null;
@@ -646,11 +907,18 @@ function renderLocal(d) {
   ui.localRange.textContent = from && to ? (from === to ? shortDay(from) : `${shortDay(from)} ~ ${shortDay(to)}`) : '';
 
   if (totals) {
-    const [input, output, reasoning, cacheRead] = ['input', 'output', 'reasoning', 'cache_read'].map((k) => num(totals[k]) ?? 0);
+    const counters = tokenKeys.map((key) => num(totals[key]) ?? 0);
     ui.statTurns.value.textContent = int(num(totals.turns));
-    ui.statTokens.value.textContent = mtok(input + output + reasoning + cacheRead);
+    ui.statTokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
     ui.statCost.value.textContent = money(num(totals.cost));
-    ui.statsNote.textContent = `${t('tokensIn')} ${mtok(input)} · ${t('tokensOut')} ${mtok(output)} · ${t('tokensReasoning')} ${mtok(reasoning)} · ${t('tokensCache')} ${mtok(cacheRead)}`;
+    ui.statsNote.textContent = [
+      `${t('tokensIn')} ${mtok(counters[0])}`,
+      `${t('tokensOut')} ${mtok(counters[1])}`,
+      `${t('tokensReasoning')} ${mtok(counters[2])}`,
+      `${t('tokensCache')} ${mtok(counters[3] + counters[4])}`,
+      `${t('statSessions')} ${int(num(totals.sessions))}`,
+      `${t('statFailed')} ${int(num(totals.failed))}`,
+    ].join(t('metaSep'));
   } else {
     const dash = t('emptyDash');
     ui.statTurns.value.textContent = dash;
@@ -668,7 +936,7 @@ function renderLocal(d) {
   ui.localNote.hidden = hasData;
   ui.localNote.textContent = local ? t('noActivity') : t('recordUnavailable');
 
-  const showDay = hasData && view !== 'all' && byDay.length > 0;
+  const showDay = hasData && (view === 'week' || view === 'month') && byDay.length > 0;
   ui.daySepSlot.hidden = !showDay;
   ui.dayChartSlot.hidden = !showDay;
   ui.modelSepSlot.hidden = !hasData;
@@ -685,17 +953,7 @@ function renderLocal(d) {
 }
 
 function renderFooter(d) {
-  const usage = isObj(d.periodUsage) ? d.periodUsage : null;
   ui.updatedLine.textContent = d.generatedAt ? `${t('updatedPrefix')} ${timeText(d.generatedAt)}` : t('updatedUnknown');
-  if (!usage) {
-    ui.lifetime.update({ text: t('lifetimeUnavailable') });
-    return;
-  }
-  const rate = num(usage.successRate);
-  const tokens = num(usage.tokens) ?? (num(usage.tokensIn) ?? 0) + (num(usage.tokensOut) ?? 0);
-  ui.lifetime.update({
-    text: t('lifetime')(int(num(usage.totalCount)), isNum(rate) ? `${rate.toFixed(2)}%` : '—', mtok(tokens)),
-  });
 }
 
 function renderNotice(d) {
@@ -746,6 +1004,7 @@ function render() {
 
   if (d) {
     renderHeader(d);
+    renderCards(d);
     renderBars(d);
     renderLocal(d);
     renderFooter(d);
@@ -856,3 +1115,10 @@ host.onReady((ctx) => {
 window.setInterval(() => {
   if (state.data) renderBars(state.data);
 }, 30000);
+
+/* a tap outside the chart dismisses a touch-opened tooltip; scrolling invalidates its anchor */
+document.addEventListener('pointerdown', (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target || !target.closest('.cg-seg')) hideTip();
+}, true);
+window.addEventListener('scroll', hideTip, { capture: true, passive: true });
