@@ -2,5 +2,10 @@ node_modules/
 .DS_Store
 *.log
 
+# Editor / IDE state (workspace.xml and friends carry local absolute paths)
+.idea/
+*.iml
+.vscode/
+
 # panel/main.js is intentionally committed: the OpenChamber host never compiles
 # a guest package, so the built bundle must ship in the repository.

@@ -33,6 +33,41 @@
   .cg-stat-label { font-size: 0.6875rem; color: var(--oc-muted); }
   .cg-stat-value { font-size: 0.875rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cg-stats-note { font-size: 0.6875rem; color: var(--oc-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .cg-note { font-size: 0.6875rem; color: var(--oc-muted); overflow-wrap: anywhere; }
+
+  /* local cost charts */
+  .cg-chart { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+  .cg-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; min-width: 0; }
+  .cg-lg-item { position: relative; display: inline-block; max-width: 100%; padding-left: 12px; font-size: 0.6875rem; line-height: 1.3; color: var(--oc-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cg-lg-item::before { content: ''; position: absolute; left: 0; top: 50%; width: 8px; height: 8px; margin-top: -4px; border-radius: 2px; background: var(--cg-color, var(--oc-muted)); }
+
+  .cg-cols { display: flex; align-items: flex-end; gap: 4px; min-width: 0; }
+  .cg-col { display: flex; flex: 1 1 0; flex-direction: column; gap: 2px; min-width: 0; }
+  .cg-stack { display: flex; flex-direction: column-reverse; justify-content: flex-start; height: var(--cg-plot, 96px); border-bottom: 1px solid var(--oc-border); overflow: hidden; }
+  .cg-seg { flex: 0 0 auto; background: var(--cg-color, var(--oc-primary)); border-radius: 2px; transition: height 200ms ease-out; }
+  .cg-col-value { font-size: 0.625rem; font-weight: 600; font-variant-numeric: tabular-nums; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cg-col-value.is-zero { font-weight: 400; color: var(--oc-muted); }
+  .cg-col-day { font-size: 0.625rem; color: var(--oc-muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .cg-cal-head { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+  .cg-cal-dow { font-size: 0.5625rem; color: var(--oc-muted); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cg-cal { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-auto-rows: 30px; gap: 3px; }
+  .cg-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; border-radius: 4px; background: color-mix(in oklab, var(--oc-muted) 12%, var(--oc-elevated)); color: var(--oc-fg); font-variant-numeric: tabular-nums; transition: background-color 200ms ease-out; }
+  .cg-cell::before { content: attr(data-day); font-size: 0.5rem; line-height: 1; }
+  .cg-cell::after { content: attr(data-cost); font-size: 0.5625rem; line-height: 1; font-weight: 600; }
+
+  .cg-models { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+  .cg-model { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .cg-model-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+  .cg-model-name { font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cg-model-cost { font-size: 0.75rem; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .cg-model-track { height: 6px; border-radius: 3px; background: var(--oc-border); overflow: hidden; }
+  .cg-model-fill { height: 100%; min-width: 4px; border-radius: 3px; background: var(--cg-color, var(--oc-primary)); transition: width 200ms ease-out; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cg-seg, .cg-cell, .cg-model-fill { transition: none; }
+  }
 
   .cg-foot { display: flex; flex-direction: column; gap: 4px; }
   .cg-foot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

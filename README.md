@@ -10,7 +10,7 @@ The panel follows your OpenChamber language: Chinese hosts get Chinese, everythi
 
 - **Three quota bars** — the rolling 5-hour window, the rolling weekly window, and the monthly credit pool. Each shows its remaining amount and a live reset countdown, and escalates from neutral to warning (≥ 60%) to error (≥ 90%).
 - **Billing period** — the plan id, the subscription status, and the current period (start → end).
-- **Local cost** — turns, tokens (in / out / reasoning / cache) and cost for today, this week, this month or all time, grouped by day and by model, read from your own OpenCode database.
+- **Local cost, as charts** — pick today, this week, this month or all time. The current week is a **stacked column chart** (cost per day, split by model, with a colour legend); the current month is a **calendar heat grid** (cost per day, intensity scaled to the month); every range ends with a **horizontal per-model ranking**, largest first. Token figures are shown in millions (`M`).
 - **Lifetime totals** — request count, success rate and total tokens for the billing period.
 - **Rail badge** — the share of the weekly window you still have left, drawn on the extension's icon.
 

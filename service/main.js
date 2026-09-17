@@ -117,26 +117,63 @@ function readApiKey() {
   }
 }
 
-// Upstream responses are cached per route, in memory only (never on disk). A fresh entry is
-// served with no network call; an expired entry is refetched, and when that refetch fails the
-// last-known-good value is still returned while the failure is recorded, so the panel shows
-// the data plus a notice instead of an empty section.
+// Upstream responses are cached per route, in memory only (never on disk). A fresh entry is served
+// with no network call; an expired entry is served immediately from the last-known-good value while
+// a single background refresh repopulates the cache (stale-while-revalidate), so a returning user
+// never blocks on the ~15 s upstream. Only a cold cache (no value to show) blocks. A failed blocking
+// fetch is still recorded as an error, so the panel shows the data it has plus a notice.
 const upstreamCache = new Map();
+const upstreamRefreshing = new Map(); // route -> in-flight background refresh (at most one per route)
 
-async function apiGet(key, route) {
+// One upstream GET, storing the parsed body on success. Rejects on any failure; callers decide how to
+// degrade. The key is only ever sent in the Authorization header, never in a message.
+async function fetchUpstream(key, route) {
+  const res = await fetch(`${API_BASE}${route}`, {
+    headers: { Authorization: `Bearer ${key}`, 'User-Agent': USER_AGENT },
+    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+  });
+  if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`);
+  const value = await res.json();
+  upstreamCache.set(route, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+  return value;
+}
+
+// Revalidate a route behind the caller's back. At most one refresh per route is in flight; the
+// rejection is handled here so a background failure can neither crash the process nor add an
+// errors[] entry — it only surfaces later if a blocking call needs a value it does not have.
+function refreshUpstream(key, route) {
+  if (upstreamRefreshing.has(route)) return;
+  const inFlight = fetchUpstream(key, route)
+    .catch(() => {})
+    .finally(() => upstreamRefreshing.delete(route));
+  upstreamRefreshing.set(route, inFlight);
+}
+
+async function apiGet(key, route, fresh = false) {
   const cached = upstreamCache.get(route);
-  if (cached && cached.expiresAt > Date.now()) return { ok: true, value: cached.value, error: null };
+
+  // Manual refresh (fresh=1): always attempt a real fetch. On failure fall back to the cached value
+  // (plus the caller's errors[] entry) so a section the user can still see is never blanked.
+  if (fresh) {
+    try {
+      return { ok: true, value: await fetchUpstream(key, route), error: null };
+    } catch (err) {
+      if (cached) return { ok: true, value: cached.value, error: err };
+      return { ok: false, value: null, error: err };
+    }
+  }
+
+  // Default path. Fresh: no network. Expired: serve the stale value now and revalidate in the
+  // background — no errors[] entry, because the caller got usable data.
+  if (cached) {
+    if (cached.expiresAt <= Date.now()) refreshUpstream(key, route);
+    return { ok: true, value: cached.value, error: null };
+  }
+
+  // Cold cache: nothing to show, so this call must block on the fetch.
   try {
-    const res = await fetch(`${API_BASE}${route}`, {
-      headers: { Authorization: `Bearer ${key}`, 'User-Agent': USER_AGENT },
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
-    if (!res.ok) throw new Error(`upstream returned HTTP ${res.status}`);
-    const value = await res.json();
-    upstreamCache.set(route, { value, expiresAt: Date.now() + CACHE_TTL_MS });
-    return { ok: true, value, error: null };
+    return { ok: true, value: await fetchUpstream(key, route), error: null };
   } catch (err) {
-    if (cached) return { ok: true, value: cached.value, error: err };
     return { ok: false, value: null, error: err };
   }
 }
@@ -197,6 +234,17 @@ function mapPeriodUsage(s) {
 }
 
 // --- local OpenCode cost (SQL semantics ported from cc-usage) ---------------
+// The whole history is aggregated ONCE into one row per (day, model); every range is then a pure
+// in-memory filter/sum over those rows, so switching today/week/month/all costs zero SQL. On a
+// 1.2 GB DB (~12k assistant rows) the single pass is ~70 ms and yields ~130 groups. The cache is
+// keyed on the DB file's mtimeMs+size and additionally floored to one rescan per
+// LOCAL_RESCAN_FLOOR_MS, so rapid tab switching (or messages streaming in) cannot re-scan in a storm.
+const LOCAL_RESCAN_FLOOR_MS = 5000;
+const LOCAL_DAYS_CAP = 31;
+const LOCAL_MODELS_CAP = 31;
+
+let localAggregates = null; // { mtimeMs, size, ranAt, rows }
+let localQueryCount = 0; // aggregation queries actually executed (logged per /summary as evidence)
 
 function openDb(DatabaseSync) {
   try {
@@ -206,65 +254,119 @@ function openDb(DatabaseSync) {
   }
 }
 
-async function queryLocal(range) {
+// One pass over assistant rows, no date filter: the per-group counters are cached so a range
+// total is a plain sum of its groups and stays exact.
+const LOCAL_AGGREGATE_SQL = `
+  select date(m.time_created/1000,'unixepoch','localtime') as day,
+    json_extract(m.data,'$.modelID') as model,
+    count(*) as turns,
+    coalesce(sum(json_extract(m.data,'$.tokens.input')),0) as input,
+    coalesce(sum(json_extract(m.data,'$.tokens.output')),0) as output,
+    coalesce(sum(json_extract(m.data,'$.tokens.reasoning')),0) as reasoning,
+    coalesce(sum(json_extract(m.data,'$.tokens.cache.read')),0) as cache_read,
+    coalesce(sum(json_extract(m.data,'$.cost')),0) as cost
+  from message m
+  where json_extract(m.data,'$.role')='assistant'
+  group by 1, 2`;
+
+async function loadLocalAggregates() {
   const DatabaseSync = await loadSqlite();
   if (!DatabaseSync) {
     throw new Error(`node:sqlite is unavailable in this runtime; local cost needs it (db: ${DB_PATH})`);
   }
-  const { from, to } = rangeBounds(range);
+  let stat;
+  try {
+    stat = fs.statSync(DB_PATH);
+  } catch (err) {
+    throw new Error(`cannot open ${DB_PATH}: ${safeMessage(err)}`);
+  }
+  const unchanged =
+    localAggregates && localAggregates.mtimeMs === stat.mtimeMs && localAggregates.size === stat.size;
+  if (unchanged) return localAggregates.rows;
+  if (localAggregates && Date.now() - localAggregates.ranAt < LOCAL_RESCAN_FLOOR_MS) return localAggregates.rows;
   const db = openDb(DatabaseSync);
   try {
-    const from3 = `from message m left join session s on s.id = m.session_id left join project p on p.id = s.project_id`;
-    const where = `where json_extract(m.data,'$.role')='assistant' and date(m.time_created/1000,'unixepoch','localtime') between ? and ?`;
-    const totals = db
-      .prepare(
-        `select count(*) as turns,
-           coalesce(sum(json_extract(m.data,'$.tokens.input')),0) as input,
-           coalesce(sum(json_extract(m.data,'$.tokens.output')),0) as output,
-           coalesce(sum(json_extract(m.data,'$.tokens.reasoning')),0) as reasoning,
-           coalesce(sum(json_extract(m.data,'$.tokens.cache.read')),0) as cache_read,
-           coalesce(sum(json_extract(m.data,'$.cost')),0) as cost
-         ${from3} ${where}`,
-      )
-      .get(from, to);
-    const byDay = db
-      .prepare(
-        `select date(m.time_created/1000,'unixepoch','localtime') as day,
-           count(*) as turns, coalesce(sum(json_extract(m.data,'$.cost')),0) as cost
-         ${from3} ${where}
-         group by 1 order by day asc limit 31`,
-      )
-      .all(from, to);
-    const byModel = db
-      .prepare(
-        `select json_extract(m.data,'$.modelID') as model,
-           count(*) as turns, coalesce(sum(json_extract(m.data,'$.cost')),0) as cost
-         ${from3} ${where}
-         group by 1 order by cost desc, turns desc limit 31`,
-      )
-      .all(from, to);
-    return {
-      from,
-      to,
-      totals: {
-        turns: num(totals.turns),
-        input: num(totals.input),
-        output: num(totals.output),
-        reasoning: num(totals.reasoning),
-        cache_read: num(totals.cache_read),
-        cost: round4(totals.cost),
-      },
-      byDay: byDay.map((r) => ({ day: r.day, turns: num(r.turns), cost: round4(r.cost) })),
-      byModel: byModel.map((r) => ({ model: r.model, turns: num(r.turns), cost: round4(r.cost) })),
-    };
+    localQueryCount += 1;
+    const rows = db.prepare(LOCAL_AGGREGATE_SQL).all();
+    localAggregates = { mtimeMs: stat.mtimeMs, size: stat.size, ranAt: Date.now(), rows };
+    return rows;
   } finally {
     db.close();
   }
 }
 
+// Model ranking shared by byModel and each day's models: cost desc, then turns desc, then model id
+// (the id tiebreak only decides the order of models that are otherwise equal, so it stays deterministic).
+const byCostThenTurns = (a, b) =>
+  b.cost - a.cost || b.turns - a.turns || (a.model < b.model ? -1 : a.model > b.model ? 1 : 0);
+
+// Pure range projection: filter the cached groups to [from, to] and sum in JS — no SQL here.
+function localForRange(rows, range) {
+  const { from, to } = rangeBounds(range);
+  const totals = { turns: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cost: 0 };
+  const days = new Map(); // day -> { day, turns, cost, models: Map(model -> { model, turns, cost }) }
+  const models = new Map(); // model -> { model, turns, cost }
+  for (const row of rows) {
+    if (row.day < from || row.day > to) continue;
+    const turns = num(row.turns);
+    const cost = num(row.cost);
+    totals.turns += turns;
+    totals.input += num(row.input);
+    totals.output += num(row.output);
+    totals.reasoning += num(row.reasoning);
+    totals.cache_read += num(row.cache_read);
+    totals.cost += cost;
+    const day = days.get(row.day) ?? { day: row.day, turns: 0, cost: 0, models: new Map() };
+    day.turns += turns;
+    day.cost += cost;
+    const dayModel = day.models.get(row.model) ?? { model: row.model, turns: 0, cost: 0 };
+    dayModel.turns += turns;
+    dayModel.cost += cost;
+    day.models.set(row.model, dayModel);
+    days.set(row.day, day);
+    const model = models.get(row.model) ?? { model: row.model, turns: 0, cost: 0 };
+    model.turns += turns;
+    model.cost += cost;
+    models.set(row.model, model);
+  }
+  return {
+    from,
+    to,
+    totals: {
+      turns: totals.turns,
+      input: totals.input,
+      output: totals.output,
+      reasoning: totals.reasoning,
+      cache_read: totals.cache_read,
+      cost: round4(totals.cost),
+    },
+    // Most recent LOCAL_DAYS_CAP days, ascending: sort ascending then keep the tail (oldest-31
+    // would silently drop the newest days once the history exceeds the cap).
+    byDay: [...days.values()]
+      .sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0))
+      .slice(-LOCAL_DAYS_CAP)
+      .map((d) => ({
+        day: d.day,
+        turns: d.turns,
+        cost: round4(d.cost),
+        models: [...d.models.values()]
+          .sort(byCostThenTurns)
+          .map((m) => ({ model: m.model, turns: m.turns, cost: round4(m.cost) })),
+      })),
+    byModel: [...models.values()]
+      .sort(byCostThenTurns)
+      .slice(0, LOCAL_MODELS_CAP)
+      .map((m) => ({ model: m.model, turns: m.turns, cost: round4(m.cost) })),
+  };
+}
+
+async function queryLocal(range) {
+  return localForRange(await loadLocalAggregates(), range);
+}
+
 // --- summary assembly -------------------------------------------------------
 
-async function buildSummary(range) {
+async function buildSummary(range, fresh) {
   const errors = [];
 
   let local = null;
@@ -273,6 +375,11 @@ async function buildSummary(range) {
   } catch (err) {
     errors.push({ source: 'db', message: safeMessage(err) });
   }
+  // Evidence that a range switch is served from the in-memory aggregation: localQueryCount only
+  // advances when the single (day, model) pass actually runs.
+  console.log(
+    `cc-goat local: range=${range} aggregationQueries=${localQueryCount} groups=${localAggregates?.rows?.length ?? 0} ok=${local !== null}`,
+  );
 
   const { key, error: keyError } = readApiKey();
   let plan = null;
@@ -284,9 +391,9 @@ async function buildSummary(range) {
     errors.push({ source: 'api', message: keyError });
   } else {
     const [sub, cred, usage] = await Promise.all([
-      apiGet(key, '/alpha/billing/subscriptions'),
-      apiGet(key, '/alpha/billing/credits'),
-      apiGet(key, '/alpha/usage/summary'),
+      apiGet(key, '/alpha/billing/subscriptions', fresh),
+      apiGet(key, '/alpha/billing/credits', fresh),
+      apiGet(key, '/alpha/usage/summary', fresh),
     ]);
     if (sub.ok) plan = mapPlan(sub.value);
     if (sub.error) errors.push({ source: 'subscriptions', message: safeMessage(sub.error, key) });
@@ -326,8 +433,9 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/summary') {
     const raw = url.searchParams.get('range');
     const range = RANGES.has(raw) ? raw : 'today';
+    const fresh = url.searchParams.get('fresh') === '1';
     try {
-      send(res, 200, await buildSummary(range));
+      send(res, 200, await buildSummary(range, fresh));
     } catch (err) {
       // Never 5xx for an upstream/data failure: degrade to nulls + errors[].
       send(res, 200, {
