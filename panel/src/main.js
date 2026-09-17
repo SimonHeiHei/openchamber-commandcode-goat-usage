@@ -31,7 +31,7 @@ const MESSAGES = {
     periodEnds: '周期至',
     cardRequests: '请求',
     cardSuccess: '成功率',
-    cardCost: '花费',
+    cardCost: '成本',
     cardTokens: 'Token',
     cardFailed: (count) => `失败 ${count}`,
     metaTurns: (count) => `${count} 轮`,
@@ -349,12 +349,6 @@ function buildBar(name) {
   return { box, progress: mountProgress(progressSlot, { value: 0, label: name }), sub, note };
 }
 
-function buildStat(label) {
-  const box = el('div', 'cg-stat'), value = el('span', 'cg-stat-value', '—');
-  box.append(el('span', 'cg-stat-label', label), value);
-  return { box, value };
-}
-
 function buildCard(label) {
   const box = el('div', 'cg-card');
   const value = el('div', 'cg-card-value', '—');
@@ -631,10 +625,11 @@ function buildUi() {
     },
   });
 
-  const stats = el('div', 'cg-stats');
-  const statTurns = buildStat(t('statTurns')), statTokens = buildStat(t('statTokens')), statCost = buildStat(t('statCost'));
-  stats.append(statTurns.box, statTokens.box, statCost.box);
-  const statsNote = el('div', 'cg-stats-note', '');
+  const localCards = el('div', 'cg-cards cg-cards-local');
+  const localTurns = buildCard(t('statTurns'));
+  const localCost = buildCard(t('statCost'));
+  const localTokens = buildCard(t('statTokens'));
+  localCards.append(localTurns.box, localCost.box, localTokens.box);
   const localNote = el('div', 'cg-note', '');
   localNote.hidden = true;
 
@@ -657,7 +652,7 @@ function buildUi() {
 
   const localSection = el('section', 'cg-section');
   localSection.append(
-    localHead, tabsSlot, stats, statsNote, localNote,
+    localHead, tabsSlot, localCards, localNote,
     daySepSlot, dayChartSlot, modelSepSlot, models.box,
   );
 
@@ -678,8 +673,9 @@ function buildUi() {
   ui = {
     spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine, bannerSlot, bannerNode,
     banner, cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
-    fiveHour, weekly, monthly, tabs, localRange, statTurns, statTokens, statCost,
-    statsNote, localNote, daySepSlot, dayChartSlot, columns, calendar, modelSepSlot, models,
+    fiveHour, weekly, monthly, tabs, localRange,
+    localCards: { turns: localTurns, cost: localCost, tokens: localTokens }, localNote,
+    daySepSlot, dayChartSlot, columns, calendar, modelSepSlot, models,
     updatedLine, refreshButton,
   };
 }
@@ -969,23 +965,26 @@ function renderLocal(d) {
 
   if (totals) {
     const counters = tokenKeys.map((key) => num(totals[key]) ?? 0);
-    ui.statTurns.value.textContent = int(num(totals.turns));
-    ui.statTokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
-    ui.statCost.value.textContent = money(num(totals.cost));
-    ui.statsNote.textContent = [
+    ui.localCards.turns.value.textContent = int(num(totals.turns));
+    ui.localCards.turns.sub.textContent = `${t('statSessions')} ${int(num(totals.sessions))}${t('metaSep')}${t('statFailed')} ${int(num(totals.failed))}`;
+    ui.localCards.turns.sub.hidden = false;
+    ui.localCards.cost.value.textContent = money(num(totals.cost));
+    ui.localCards.cost.sub.hidden = true;
+    ui.localCards.tokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
+    ui.localCards.tokens.sub.textContent = [
       `${t('tokensIn')} ${mtok(counters[0])}`,
       `${t('tokensOut')} ${mtok(counters[1])}`,
       `${t('tokensReasoning')} ${mtok(counters[2])}`,
       `${t('tokensCache')} ${mtok(counters[3] + counters[4])}`,
-      `${t('statSessions')} ${int(num(totals.sessions))}`,
-      `${t('statFailed')} ${int(num(totals.failed))}`,
     ].join(t('metaSep'));
+    ui.localCards.tokens.sub.hidden = false;
   } else {
     const dash = t('emptyDash');
-    ui.statTurns.value.textContent = dash;
-    ui.statTokens.value.textContent = dash;
-    ui.statCost.value.textContent = dash;
-    ui.statsNote.textContent = t('recordUnavailable');
+    for (const card of [ui.localCards.turns, ui.localCards.cost, ui.localCards.tokens]) {
+      card.value.textContent = dash;
+      card.sub.textContent = '';
+      card.sub.hidden = true;
+    }
   }
 
   const byDay = local && Array.isArray(local.byDay) ? local.byDay.filter(isObj) : [];

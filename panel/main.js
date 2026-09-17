@@ -1544,7 +1544,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       periodEnds: "\u5468\u671F\u81F3",
       cardRequests: "\u8BF7\u6C42",
       cardSuccess: "\u6210\u529F\u7387",
-      cardCost: "\u82B1\u8D39",
+      cardCost: "\u6210\u672C",
       cardTokens: "Token",
       cardFailed: (count) => `\u5931\u8D25 ${count}`,
       metaTurns: (count) => `${count} \u8F6E`,
@@ -1855,11 +1855,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     box.append(progressSlot, sub, note);
     return { box, progress: mountProgress(progressSlot, { value: 0, label: name }), sub, note };
   }
-  function buildStat(label) {
-    const box = el2("div", "cg-stat"), value = el2("span", "cg-stat-value", "\u2014");
-    box.append(el2("span", "cg-stat-label", label), value);
-    return { box, value };
-  }
   function buildCard(label) {
     const box = el2("div", "cg-card");
     const value = el2("div", "cg-card-value", "\u2014");
@@ -2109,10 +2104,11 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
         if (next !== state.range) selectRange(next);
       }
     });
-    const stats = el2("div", "cg-stats");
-    const statTurns = buildStat(t("statTurns")), statTokens = buildStat(t("statTokens")), statCost = buildStat(t("statCost"));
-    stats.append(statTurns.box, statTokens.box, statCost.box);
-    const statsNote = el2("div", "cg-stats-note", "");
+    const localCards = el2("div", "cg-cards cg-cards-local");
+    const localTurns = buildCard(t("statTurns"));
+    const localCost = buildCard(t("statCost"));
+    const localTokens = buildCard(t("statTokens"));
+    localCards.append(localTurns.box, localCost.box, localTokens.box);
     const localNote = el2("div", "cg-note", "");
     localNote.hidden = true;
     const daySepSlot = el2("div");
@@ -2134,8 +2130,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     localSection.append(
       localHead,
       tabsSlot,
-      stats,
-      statsNote,
+      localCards,
       localNote,
       daySepSlot,
       dayChartSlot,
@@ -2175,10 +2170,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       monthly,
       tabs,
       localRange,
-      statTurns,
-      statTokens,
-      statCost,
-      statsNote,
+      localCards: { turns: localTurns, cost: localCost, tokens: localTokens },
       localNote,
       daySepSlot,
       dayChartSlot,
@@ -2484,23 +2476,26 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     ui.localRange.textContent = from && to ? from === to ? shortDay(from) : `${shortDay(from)} ~ ${shortDay(to)}` : "";
     if (totals) {
       const counters = tokenKeys.map((key) => num(totals[key]) ?? 0);
-      ui.statTurns.value.textContent = int(num(totals.turns));
-      ui.statTokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
-      ui.statCost.value.textContent = money(num(totals.cost));
-      ui.statsNote.textContent = [
+      ui.localCards.turns.value.textContent = int(num(totals.turns));
+      ui.localCards.turns.sub.textContent = `${t("statSessions")} ${int(num(totals.sessions))}${t("metaSep")}${t("statFailed")} ${int(num(totals.failed))}`;
+      ui.localCards.turns.sub.hidden = false;
+      ui.localCards.cost.value.textContent = money(num(totals.cost));
+      ui.localCards.cost.sub.hidden = true;
+      ui.localCards.tokens.value.textContent = mtok(counters.reduce((a, b) => a + b, 0));
+      ui.localCards.tokens.sub.textContent = [
         `${t("tokensIn")} ${mtok(counters[0])}`,
         `${t("tokensOut")} ${mtok(counters[1])}`,
         `${t("tokensReasoning")} ${mtok(counters[2])}`,
-        `${t("tokensCache")} ${mtok(counters[3] + counters[4])}`,
-        `${t("statSessions")} ${int(num(totals.sessions))}`,
-        `${t("statFailed")} ${int(num(totals.failed))}`
+        `${t("tokensCache")} ${mtok(counters[3] + counters[4])}`
       ].join(t("metaSep"));
+      ui.localCards.tokens.sub.hidden = false;
     } else {
       const dash = t("emptyDash");
-      ui.statTurns.value.textContent = dash;
-      ui.statTokens.value.textContent = dash;
-      ui.statCost.value.textContent = dash;
-      ui.statsNote.textContent = t("recordUnavailable");
+      for (const card of [ui.localCards.turns, ui.localCards.cost, ui.localCards.tokens]) {
+        card.value.textContent = dash;
+        card.sub.textContent = "";
+        card.sub.hidden = true;
+      }
     }
     const byDay = local && Array.isArray(local.byDay) ? local.byDay.filter(isObj) : [];
     const models = local ? sortModels(local.byModel) : [];
