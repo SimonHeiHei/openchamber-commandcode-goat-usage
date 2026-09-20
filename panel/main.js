@@ -1542,6 +1542,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       resetInHours: (hour) => `${hour} \u5C0F\u65F6\u540E\u91CD\u7F6E`,
       resetInMinutes: (minute) => `${minute} \u5206\u949F\u540E\u91CD\u7F6E`,
       periodEnds: "\u5468\u671F\u81F3",
+      periodProgress: (pct) => `\u672C\u6708\u5DF2\u8FC7 ${pct}%`,
       cardRequests: "\u8BF7\u6C42",
       cardSuccess: "\u6210\u529F\u7387",
       cardCost: "\u6210\u672C",
@@ -1564,6 +1565,9 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       statTurns: "\u8F6E\u6B21",
       statTokens: "Token",
       statCost: "\u6210\u672C",
+      modelsMore: (count) => `\u5C55\u5F00\u5176\u4F59 ${count} \u4E2A\u6A21\u578B`,
+      modelsLess: "\u6536\u8D77",
+      modelsOther: "\u5176\u4ED6",
       tokensIn: "\u5165",
       tokensOut: "\u51FA",
       tokensReasoning: "\u601D\u8003",
@@ -1633,6 +1637,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       resetInHours: (hour) => `resets in ${hour}h`,
       resetInMinutes: (minute) => `resets in ${minute}m`,
       periodEnds: "period ends",
+      periodProgress: (pct) => `${pct}% elapsed`,
       cardRequests: "Requests",
       cardSuccess: "Success",
       cardCost: "Cost",
@@ -1655,6 +1660,9 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       statTurns: "Turns",
       statTokens: "Tokens",
       statCost: "Cost",
+      modelsMore: (count) => `Show ${count} more models`,
+      modelsLess: "Show less",
+      modelsOther: "Other",
       tokensIn: "in",
       tokensOut: "out",
       tokensReasoning: "reasoning",
@@ -1726,6 +1734,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   ];
   var OTHER_SLOT = TOP_MODELS;
   var BAR_ROWS = 10;
+  var MODEL_TOP_N = 5;
+  var RESET_SOON_MS = 60 * 60 * 1e3;
   var COLUMN_COUNT = 7;
   var CALENDAR_CELLS = 42;
   var PLOT_PX = 96;
@@ -1735,7 +1745,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   var TIP_PAD = 8;
   var HEAT_MIN_MIX = 10;
   var HEAT_MAX_MIX = 60;
-  var state = { range: "today", dataRange: null, data: null, loading: false, problem: null };
+  var state = { range: "today", dataRange: null, data: null, loading: false, problem: null, modelsExpanded: false };
   var cache = /* @__PURE__ */ new Map();
   var ui = null;
   var fetchSeq = 0;
@@ -1753,6 +1763,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
   var pctText = (v2) => isNum(v2) ? `${v2.toFixed(1).replace(/\.0$/, "")}%` : "\u2014";
   var plainInt = (v2) => isNum(v2) ? String(Math.round(v2)) : "\u2014";
   var money4 = (v2) => isNum(v2) ? `$${v2.toFixed(4)}` : "\u2014";
+  var lowToneFor = (pct) => pct >= 90 ? "is-critical" : pct >= 60 ? "is-low" : "";
   var tokenKeys = ["input", "output", "reasoning", "cache_read", "cache_write"];
   var tokenTotal = (row) => tokenKeys.reduce((sum, key) => sum + (num(row[key]) ?? 0), 0);
   var cacheHitRate = (row) => {
@@ -2057,7 +2068,18 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       box.append(row);
       rows.push({ row, name, cost, meta, fill });
     }
-    return { box, rows };
+    const more = el2("button", "cg-models-more");
+    more.type = "button";
+    more.hidden = true;
+    more.addEventListener("click", () => {
+      state.modelsExpanded = !state.modelsExpanded;
+      renderModelsOnly();
+    });
+    box.append(more);
+    return { box, rows, more };
+  }
+  function renderModelsOnly() {
+    if (ui && state.data) renderLocal(isObj(state.data) ? state.data : null);
   }
   function buildUi() {
     const root = document.getElementById("root");
@@ -2071,11 +2093,25 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     content.hidden = true;
     const planName = el2("span", "cg-plan", "\u2014"), badgeSlot = el2("span");
     const periodLine = el2("div", "cg-period", "\u2014");
+    const headRight = el2("div", "cg-head-right");
     const refreshSlot = el2("span", "cg-refresh");
+    const updatedLine = el2("span", "cg-updated", "\u2014");
+    headRight.append(refreshSlot, updatedLine);
     const headTop = el2("div", "cg-head-top");
-    headTop.append(planName, badgeSlot, el2("span", "cg-spacer"), refreshSlot);
+    headTop.append(planName, badgeSlot, el2("span", "cg-spacer"), headRight);
+    const periodRace = el2("div", "cg-period-race");
+    periodRace.setAttribute("role", "progressbar");
+    periodRace.setAttribute("aria-valuemin", "0");
+    periodRace.setAttribute("aria-valuemax", "100");
+    const farmer = el2("span", "cg-farmer");
+    farmer.setAttribute("aria-hidden", "true");
+    farmer.innerHTML = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><g class="cg-wheel cg-wheel-back"><circle cx="30" cy="70" r="15" class="cg-bike-stroke"/><line x1="30" y1="57" x2="30" y2="83" class="cg-bike-spoke"/><line x1="17" y1="70" x2="43" y2="70" class="cg-bike-spoke"/><line x1="20.8" y1="60.8" x2="39.2" y2="79.2" class="cg-bike-spoke"/></g><g class="cg-wheel cg-wheel-front"><circle cx="72" cy="70" r="15" class="cg-bike-stroke"/><line x1="72" y1="57" x2="72" y2="83" class="cg-bike-spoke"/><line x1="59" y1="70" x2="85" y2="70" class="cg-bike-spoke"/><line x1="62.8" y1="60.8" x2="81.2" y2="79.2" class="cg-bike-spoke"/></g><path d="M30 70 L50 70 L66 40 L46 40 Z" class="cg-bike-frame"/><line x1="30" y1="70" x2="46" y2="40" class="cg-bike-frame"/><line x1="66" y1="40" x2="72" y2="70" class="cg-bike-frame"/><path d="M66 40 L61 31 L67 31" class="cg-bike-frame"/><line x1="46" y1="40" x2="41" y2="33" class="cg-bike-frame"/><line x1="50" y1="70" x2="46" y2="61" class="cg-bike-frame"/></svg>';
+    const periodTrack = el2("div", "cg-period-track");
+    const periodFill = el2("div", "cg-period-fill");
+    periodTrack.append(periodFill);
+    periodRace.append(farmer, periodTrack);
     const head = el2("header", "cg-head");
-    head.append(headTop, periodLine);
+    head.append(headTop, periodLine, periodRace);
     const bannerSlot = el2("div");
     bannerSlot.hidden = true;
     const banner = mountBanner(bannerSlot, { tone: "warning", title: "" });
@@ -2137,11 +2173,6 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       modelSepSlot,
       models.box
     );
-    const updatedLine = el2("span", "cg-foot-note", "\u2014");
-    const footRow = el2("div", "cg-foot-row");
-    footRow.append(updatedLine);
-    const foot = el2("footer", "cg-foot");
-    foot.append(footRow);
     const badge = mountBadge(badgeSlot, { label: "" });
     badgeSlot.hidden = true;
     const refreshButton = mountButton(refreshSlot, {
@@ -2150,7 +2181,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       size: "xs",
       onClick: () => void manualRefresh()
     });
-    content.append(head, cards, bannerSlot, bars, localSection, foot);
+    content.append(head, cards, bannerSlot, bars, localSection);
     root.append(spinnerWrap, emptyWrap, content);
     ui = {
       spinnerWrap,
@@ -2161,6 +2192,9 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       badgeSlot,
       badge,
       periodLine,
+      periodRace,
+      periodFill,
+      farmer,
       bannerSlot,
       bannerNode,
       banner,
@@ -2360,23 +2394,27 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     t("metaCached")(cachePctText(row))
   ].join(t("metaSep"));
   function updateModels(chart, models) {
-    const top = models.slice(0, BAR_ROWS);
-    const rest = models.slice(BAR_ROWS);
-    const max = top.length > 0 ? costOf(top[0]) : 0;
-    const rows = top.map((row, i) => ({
+    const expanded = state.modelsExpanded;
+    const head = models.slice(0, MODEL_TOP_N);
+    const rest = models.slice(MODEL_TOP_N);
+    const shown = expanded ? models.slice(0, BAR_ROWS) : head;
+    const folded = expanded ? models.slice(BAR_ROWS) : rest;
+    const max = models.length > 0 ? costOf(models[0]) : 0;
+    const rank = rankModels(models);
+    const rows = shown.map((row) => ({
       name: shortModel(row.model),
       cost: costOf(row),
-      slot: i < TOP_MODELS ? i : OTHER_SLOT,
+      slot: slotFor(rank, row.model),
       meta: metaText(row)
     }));
-    if (rest.length > 0) {
+    if (folded.length > 0) {
       const tail = { turns: 0, cost: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, sessions: null };
-      for (const row of rest) {
+      for (const row of folded) {
         tail.turns += num(row.turns) ?? 0;
         tail.cost += costOf(row);
         for (const key of tokenKeys) tail[key] += num(row[key]) ?? 0;
       }
-      rows.push({ name: t("other"), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
+      rows.push({ name: t("modelsOther"), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
     }
     chart.rows.forEach((cell, i) => {
       const row = rows[i];
@@ -2388,9 +2426,21 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
       cell.row.style.setProperty("--cg-color", MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
       cell.name.textContent = row.name;
       cell.cost.textContent = money(row.cost);
+      cell.cost.style.setProperty("--cg-color", MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
       cell.meta.textContent = row.meta;
       cell.fill.style.width = max > 0 ? `${(Math.min(1, row.cost / max) * 100).toFixed(1)}%` : "0%";
     });
+    chart.more.hidden = folded.length === 0 && !expanded;
+    if (folded.length > 0) chart.more.textContent = t("modelsMore")(folded.length);
+    else if (expanded) chart.more.textContent = t("modelsLess");
+  }
+  function periodProgressOf(start, end, now = Date.now()) {
+    const s = asDate(start), e = asDate(end);
+    if (!s || !e) return null;
+    const total = e.getTime() - s.getTime();
+    if (!(total > 0)) return null;
+    const elapsed = now - s.getTime();
+    return Math.min(100, Math.max(0, elapsed / total * 100));
   }
   function renderHeader(d) {
     const plan = isObj(d.plan) ? d.plan : null;
@@ -2401,7 +2451,35 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     ui.planName.textContent = planId ?? t("planFallback");
     ui.badgeSlot.hidden = !status;
     if (status) ui.badge.update({ label: status, tone: status === "active" ? "success" : "warning" });
-    ui.periodLine.textContent = start && end ? `${dateText(start)} \u2192 ${dateText(end)}` : t("periodUnavailable");
+    const pct = periodProgressOf(start, end);
+    if (start && end) {
+      const label = `${dateText(start)} \u2192 ${dateText(end)}`;
+      ui.periodLine.textContent = pct === null ? label : `${label} \xB7 ${t("periodProgress")(pct.toFixed(1).replace(/\.0$/, ""))}`;
+    } else {
+      ui.periodLine.textContent = t("periodUnavailable");
+    }
+    if (pct === null) {
+      ui.periodRace.hidden = true;
+      return;
+    }
+    ui.periodRace.hidden = false;
+    ui.periodRace.setAttribute("aria-valuenow", pct.toFixed(1));
+    ui.periodRace.setAttribute("aria-label", ui.periodLine.textContent);
+    ui.periodRace.title = ui.periodLine.textContent;
+    ui.periodFill.style.width = `${pct.toFixed(2)}%`;
+    ui.farmer.style.left = `${Math.min(99, Math.max(1, pct)).toFixed(2)}%`;
+  }
+  function barSubText(bar, parts) {
+    bar.sub.replaceChildren();
+    parts.forEach((part, i) => {
+      if (i > 0) bar.sub.append(document.createTextNode(" \xB7 "));
+      if (typeof part === "string") {
+        bar.sub.append(document.createTextNode(part));
+        return;
+      }
+      const span = el2("span", part.tone ?? "", part.text);
+      bar.sub.append(span);
+    });
   }
   function fillWindowBar(bar, name, win) {
     const pct = pctOf(win);
@@ -2414,7 +2492,13 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const remaining = cap !== null && used !== null ? Math.max(0, cap - used) : null;
     bar.box.hidden = false;
     bar.progress.update({ value: pct, label: `${name} \xB7 ${pctText(pct)}`, tone: toneFor(pct) });
-    bar.sub.textContent = `${t("remaining")} ${money(remaining)} \xB7 ${countdownText(win.resetAt)}`;
+    const lowTone = lowToneFor(pct);
+    const resetAt = num(win.resetAt);
+    const countdownTone = resetAt !== null && resetAt - Date.now() <= RESET_SOON_MS ? lowTone || "is-low" : "";
+    barSubText(bar, [
+      { text: `${t("remaining")} ${money(remaining)}`, tone: lowTone },
+      { text: countdownText(win.resetAt), tone: countdownTone }
+    ]);
     bar.sub.hidden = false;
     bar.note.hidden = true;
   }
@@ -2433,7 +2517,11 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const end = isObj(d.plan) ? d.plan.periodEnd : null;
     bar.box.hidden = false;
     bar.progress.update({ value: pct, label: `${t("barMonthly")} \xB7 ${pctText(pct)}`, tone: toneFor(pct) });
-    bar.sub.textContent = `${t("used")} ${money(used)} / ${money(total)} \xB7 ${t("remaining")} ${money(remaining)}`;
+    const lowTone = lowToneFor(pct);
+    barSubText(bar, [
+      `${t("used")} ${money(used)} / ${money(total)}`,
+      { text: `${t("remaining")} ${money(remaining)}`, tone: lowTone }
+    ]);
     bar.sub.hidden = false;
     bar.note.textContent = end ? `${t("periodEnds")} ${dateText(end)}` : "";
     bar.note.hidden = !end;
@@ -2462,7 +2550,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     const rate = num(usage.successRate);
     cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t("emptyDash");
     cards.success.sub.hidden = true;
-    cards.cost.value.textContent = money4(num(usage.totalCost));
+    cards.cost.value.textContent = money(num(usage.totalCost));
     cards.tokens.value.textContent = mtok(num(usage.tokens));
     cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t("tokensIn")} / ${mtok(num(usage.tokensOut))} ${t("tokensOut")}`;
     cards.tokens.sub.hidden = false;
@@ -2708,7 +2796,10 @@ textarea.oc-sdk-input { height: auto; padding: 8px 12px; resize: vertical; }
     }
   });
   window.setInterval(() => {
-    if (state.data) renderBars(state.data);
+    if (state.data) {
+      renderHeader(state.data);
+      renderBars(state.data);
+    }
   }, 3e4);
   document.addEventListener("pointerdown", (event) => {
     const target = event.target instanceof Element ? event.target : null;

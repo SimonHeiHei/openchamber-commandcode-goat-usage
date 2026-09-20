@@ -29,6 +29,7 @@ const MESSAGES = {
     resetInHours: (hour) => `${hour} 小时后重置`,
     resetInMinutes: (minute) => `${minute} 分钟后重置`,
     periodEnds: '周期至',
+    periodProgress: (pct) => `本月已过 ${pct}%`,
     cardRequests: '请求',
     cardSuccess: '成功率',
     cardCost: '成本',
@@ -51,6 +52,9 @@ const MESSAGES = {
     statTurns: '轮次',
     statTokens: 'Token',
     statCost: '成本',
+    modelsMore: (count) => `展开其余 ${count} 个模型`,
+    modelsLess: '收起',
+    modelsOther: '其他',
     tokensIn: '入',
     tokensOut: '出',
     tokensReasoning: '思考',
@@ -120,6 +124,7 @@ const MESSAGES = {
     resetInHours: (hour) => `resets in ${hour}h`,
     resetInMinutes: (minute) => `resets in ${minute}m`,
     periodEnds: 'period ends',
+    periodProgress: (pct) => `${pct}% elapsed`,
     cardRequests: 'Requests',
     cardSuccess: 'Success',
     cardCost: 'Cost',
@@ -142,6 +147,9 @@ const MESSAGES = {
     statTurns: 'Turns',
     statTokens: 'Tokens',
     statCost: 'Cost',
+    modelsMore: (count) => `Show ${count} more models`,
+    modelsLess: 'Show less',
+    modelsOther: 'Other',
     tokensIn: 'in',
     tokensOut: 'out',
     tokensReasoning: 'reasoning',
@@ -216,6 +224,8 @@ const MODEL_COLORS = [
 ];
 const OTHER_SLOT = TOP_MODELS;
 const BAR_ROWS = 10;
+const MODEL_TOP_N = 5;
+const RESET_SOON_MS = 60 * 60 * 1000;
 const COLUMN_COUNT = 7;
 const CALENDAR_CELLS = 42;
 const PLOT_PX = 96;
@@ -226,7 +236,7 @@ const TIP_PAD = 8;
 const HEAT_MIN_MIX = 10;
 const HEAT_MAX_MIX = 60;
 
-const state = { range: 'today', dataRange: null, data: null, loading: false, problem: null };
+const state = { range: 'today', dataRange: null, data: null, loading: false, problem: null, modelsExpanded: false };
 const cache = new Map();
 let ui = null;
 let fetchSeq = 0;
@@ -246,6 +256,7 @@ const pctText = (v) => (isNum(v) ? `${v.toFixed(1).replace(/\.0$/, '')}%` : '—
 /* billing-period formatters — plain integers and exact money, per the reference look */
 const plainInt = (v) => (isNum(v) ? String(Math.round(v)) : '—');
 const money4 = (v) => (isNum(v) ? `$${v.toFixed(4)}` : '—');
+const lowToneFor = (pct) => (pct >= 90 ? 'is-critical' : pct >= 60 ? 'is-low' : '');
 /* local-cost counters — v3 rows carry input/output/reasoning/cache_read/cache_write */
 const tokenKeys = ['input', 'output', 'reasoning', 'cache_read', 'cache_write'];
 const tokenTotal = (row) => tokenKeys.reduce((sum, key) => sum + (num(row[key]) ?? 0), 0);
@@ -573,7 +584,19 @@ function buildModels() {
     box.append(row);
     rows.push({ row, name, cost, meta, fill });
   }
-  return { box, rows };
+  const more = el('button', 'cg-models-more');
+  more.type = 'button';
+  more.hidden = true;
+  more.addEventListener('click', () => {
+    state.modelsExpanded = !state.modelsExpanded;
+    renderModelsOnly();
+  });
+  box.append(more);
+  return { box, rows, more };
+}
+
+function renderModelsOnly() {
+  if (ui && state.data) renderLocal(isObj(state.data) ? state.data : null);
 }
 
 function buildUi() {
@@ -589,11 +612,39 @@ function buildUi() {
 
   const planName = el('span', 'cg-plan', '—'), badgeSlot = el('span');
   const periodLine = el('div', 'cg-period', '—');
+  const headRight = el('div', 'cg-head-right');
   const refreshSlot = el('span', 'cg-refresh');
+  const updatedLine = el('span', 'cg-updated', '—');
+  headRight.append(refreshSlot, updatedLine);
   const headTop = el('div', 'cg-head-top');
-  headTop.append(planName, badgeSlot, el('span', 'cg-spacer'), refreshSlot);
+  headTop.append(planName, badgeSlot, el('span', 'cg-spacer'), headRight);
+  const periodRace = el('div', 'cg-period-race');
+  periodRace.setAttribute('role', 'progressbar');
+  periodRace.setAttribute('aria-valuemin', '0');
+  periodRace.setAttribute('aria-valuemax', '100');
+  const farmer = el('span', 'cg-farmer');
+  farmer.setAttribute('aria-hidden', 'true');
+  farmer.innerHTML = '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">'
+    + '<g class="cg-wheel cg-wheel-back"><circle cx="30" cy="70" r="15" class="cg-bike-stroke"/>'
+    + '<line x1="30" y1="57" x2="30" y2="83" class="cg-bike-spoke"/>'
+    + '<line x1="17" y1="70" x2="43" y2="70" class="cg-bike-spoke"/>'
+    + '<line x1="20.8" y1="60.8" x2="39.2" y2="79.2" class="cg-bike-spoke"/></g>'
+    + '<g class="cg-wheel cg-wheel-front"><circle cx="72" cy="70" r="15" class="cg-bike-stroke"/>'
+    + '<line x1="72" y1="57" x2="72" y2="83" class="cg-bike-spoke"/>'
+    + '<line x1="59" y1="70" x2="85" y2="70" class="cg-bike-spoke"/>'
+    + '<line x1="62.8" y1="60.8" x2="81.2" y2="79.2" class="cg-bike-spoke"/></g>'
+    + '<path d="M30 70 L50 70 L66 40 L46 40 Z" class="cg-bike-frame"/>'
+    + '<line x1="30" y1="70" x2="46" y2="40" class="cg-bike-frame"/>'
+    + '<line x1="66" y1="40" x2="72" y2="70" class="cg-bike-frame"/>'
+    + '<path d="M66 40 L61 31 L67 31" class="cg-bike-frame"/>'
+    + '<line x1="46" y1="40" x2="41" y2="33" class="cg-bike-frame"/>'
+    + '<line x1="50" y1="70" x2="46" y2="61" class="cg-bike-frame"/></svg>';
+  const periodTrack = el('div', 'cg-period-track');
+  const periodFill = el('div', 'cg-period-fill');
+  periodTrack.append(periodFill);
+  periodRace.append(farmer, periodTrack);
   const head = el('header', 'cg-head');
-  head.append(headTop, periodLine);
+  head.append(headTop, periodLine, periodRace);
 
   const bannerSlot = el('div');
   bannerSlot.hidden = true;
@@ -656,22 +707,17 @@ function buildUi() {
     daySepSlot, dayChartSlot, modelSepSlot, models.box,
   );
 
-  const updatedLine = el('span', 'cg-foot-note', '—');
-  const footRow = el('div', 'cg-foot-row');
-  footRow.append(updatedLine);
-  const foot = el('footer', 'cg-foot');
-  foot.append(footRow);
-
   const badge = mountBadge(badgeSlot, { label: '' });
   badgeSlot.hidden = true;
   const refreshButton = mountButton(refreshSlot, {
     label: t('refresh'), variant: 'outline', size: 'xs', onClick: () => void manualRefresh(),
   });
 
-  content.append(head, cards, bannerSlot, bars, localSection, foot);
+  content.append(head, cards, bannerSlot, bars, localSection);
   root.append(spinnerWrap, emptyWrap, content);
   ui = {
-    spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine, bannerSlot, bannerNode,
+    spinnerWrap, emptyWrap, empty, content, planName, badgeSlot, badge, periodLine,
+    periodRace, periodFill, farmer, bannerSlot, bannerNode,
     banner, cards: { requests: cardRequests, success: cardSuccess, cost: cardCost, tokens: cardTokens },
     fiveHour, weekly, monthly, tabs, localRange,
     localCards: { turns: localTurns, cost: localCost, tokens: localTokens }, localNote,
@@ -844,20 +890,24 @@ const metaText = (row) => [
 ].join(t('metaSep'));
 
 function updateModels(chart, models) {
-  const top = models.slice(0, BAR_ROWS);
-  const rest = models.slice(BAR_ROWS);
-  const max = top.length > 0 ? costOf(top[0]) : 0;
-  const rows = top.map((row, i) => ({
-    name: shortModel(row.model), cost: costOf(row), slot: i < TOP_MODELS ? i : OTHER_SLOT, meta: metaText(row),
+  const expanded = state.modelsExpanded;
+  const head = models.slice(0, MODEL_TOP_N);
+  const rest = models.slice(MODEL_TOP_N);
+  const shown = expanded ? models.slice(0, BAR_ROWS) : head;
+  const folded = expanded ? models.slice(BAR_ROWS) : rest;
+  const max = models.length > 0 ? costOf(models[0]) : 0;
+  const rank = rankModels(models);
+  const rows = shown.map((row) => ({
+    name: shortModel(row.model), cost: costOf(row), slot: slotFor(rank, row.model), meta: metaText(row),
   }));
-  if (rest.length > 0) {
+  if (folded.length > 0) {
     const tail = { turns: 0, cost: 0, input: 0, output: 0, reasoning: 0, cache_read: 0, cache_write: 0, sessions: null };
-    for (const row of rest) {
+    for (const row of folded) {
       tail.turns += num(row.turns) ?? 0;
       tail.cost += costOf(row);
       for (const key of tokenKeys) tail[key] += num(row[key]) ?? 0;
     }
-    rows.push({ name: t('other'), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
+    rows.push({ name: t('modelsOther'), cost: tail.cost, slot: OTHER_SLOT, meta: metaText(tail) });
   }
   chart.rows.forEach((cell, i) => {
     const row = rows[i];
@@ -869,12 +919,25 @@ function updateModels(chart, models) {
     cell.row.style.setProperty('--cg-color', MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
     cell.name.textContent = row.name;
     cell.cost.textContent = money(row.cost);
+    cell.cost.style.setProperty('--cg-color', MODEL_COLORS[row.slot] ?? MODEL_COLORS[OTHER_SLOT]);
     cell.meta.textContent = row.meta;
     cell.fill.style.width = max > 0 ? `${(Math.min(1, row.cost / max) * 100).toFixed(1)}%` : '0%';
   });
+  chart.more.hidden = folded.length === 0 && !expanded;
+  if (folded.length > 0) chart.more.textContent = t('modelsMore')(folded.length);
+  else if (expanded) chart.more.textContent = t('modelsLess');
 }
 
 /* render */
+function periodProgressOf(start, end, now = Date.now()) {
+  const s = asDate(start), e = asDate(end);
+  if (!s || !e) return null;
+  const total = e.getTime() - s.getTime();
+  if (!(total > 0)) return null;
+  const elapsed = now - s.getTime();
+  return Math.min(100, Math.max(0, (elapsed / total) * 100));
+}
+
 function renderHeader(d) {
   const plan = isObj(d.plan) ? d.plan : null;
   const planId = plan && typeof plan.planId === 'string' && plan.planId ? plan.planId : null;
@@ -884,7 +947,36 @@ function renderHeader(d) {
   ui.planName.textContent = planId ?? t('planFallback');
   ui.badgeSlot.hidden = !status;
   if (status) ui.badge.update({ label: status, tone: status === 'active' ? 'success' : 'warning' });
-  ui.periodLine.textContent = start && end ? `${dateText(start)} → ${dateText(end)}` : t('periodUnavailable');
+  const pct = periodProgressOf(start, end);
+  if (start && end) {
+    const label = `${dateText(start)} → ${dateText(end)}`;
+    ui.periodLine.textContent = pct === null ? label : `${label} · ${t('periodProgress')(pct.toFixed(1).replace(/\.0$/, ''))}`;
+  } else {
+    ui.periodLine.textContent = t('periodUnavailable');
+  }
+  if (pct === null) {
+    ui.periodRace.hidden = true;
+    return;
+  }
+  ui.periodRace.hidden = false;
+  ui.periodRace.setAttribute('aria-valuenow', pct.toFixed(1));
+  ui.periodRace.setAttribute('aria-label', ui.periodLine.textContent);
+  ui.periodRace.title = ui.periodLine.textContent;
+  ui.periodFill.style.width = `${pct.toFixed(2)}%`;
+  ui.farmer.style.left = `${Math.min(99, Math.max(1, pct)).toFixed(2)}%`;
+}
+
+function barSubText(bar, parts) {
+  bar.sub.replaceChildren();
+  parts.forEach((part, i) => {
+    if (i > 0) bar.sub.append(document.createTextNode(' · '));
+    if (typeof part === 'string') {
+      bar.sub.append(document.createTextNode(part));
+      return;
+    }
+    const span = el('span', part.tone ?? '', part.text);
+    bar.sub.append(span);
+  });
 }
 
 function fillWindowBar(bar, name, win) {
@@ -898,7 +990,13 @@ function fillWindowBar(bar, name, win) {
   const remaining = cap !== null && used !== null ? Math.max(0, cap - used) : null;
   bar.box.hidden = false;
   bar.progress.update({ value: pct, label: `${name} · ${pctText(pct)}`, tone: toneFor(pct) });
-  bar.sub.textContent = `${t('remaining')} ${money(remaining)} · ${countdownText(win.resetAt)}`;
+  const lowTone = lowToneFor(pct);
+  const resetAt = num(win.resetAt);
+  const countdownTone = resetAt !== null && resetAt - Date.now() <= RESET_SOON_MS ? lowTone || 'is-low' : '';
+  barSubText(bar, [
+    { text: `${t('remaining')} ${money(remaining)}`, tone: lowTone },
+    { text: countdownText(win.resetAt), tone: countdownTone },
+  ]);
   bar.sub.hidden = false;
   bar.note.hidden = true;
 }
@@ -918,7 +1016,11 @@ function fillMonthlyBar(d) {
   const end = isObj(d.plan) ? d.plan.periodEnd : null;
   bar.box.hidden = false;
   bar.progress.update({ value: pct, label: `${t('barMonthly')} · ${pctText(pct)}`, tone: toneFor(pct) });
-  bar.sub.textContent = `${t('used')} ${money(used)} / ${money(total)} · ${t('remaining')} ${money(remaining)}`;
+  const lowTone = lowToneFor(pct);
+  barSubText(bar, [
+    `${t('used')} ${money(used)} / ${money(total)}`,
+    { text: `${t('remaining')} ${money(remaining)}`, tone: lowTone },
+  ]);
   bar.sub.hidden = false;
   bar.note.textContent = end ? `${t('periodEnds')} ${dateText(end)}` : '';
   bar.note.hidden = !end;
@@ -949,7 +1051,7 @@ function renderCards(d) {
   const rate = num(usage.successRate);
   cards.success.value.textContent = isNum(rate) ? `${rate.toFixed(2)}%` : t('emptyDash');
   cards.success.sub.hidden = true;
-  cards.cost.value.textContent = money4(num(usage.totalCost));
+  cards.cost.value.textContent = money(num(usage.totalCost));
   cards.tokens.value.textContent = mtok(num(usage.tokens));
   cards.tokens.sub.textContent = `${mtok(num(usage.tokensIn))} ${t('tokensIn')} / ${mtok(num(usage.tokensOut))} ${t('tokensOut')}`;
   cards.tokens.sub.hidden = false;
@@ -1212,7 +1314,10 @@ host.onReady((ctx) => {
 });
 
 window.setInterval(() => {
-  if (state.data) renderBars(state.data);
+  if (state.data) {
+    renderHeader(state.data);
+    renderBars(state.data);
+  }
 }, 30000);
 
 /* a tap outside a chart dismisses a touch-opened tooltip; scrolling invalidates its anchor */
